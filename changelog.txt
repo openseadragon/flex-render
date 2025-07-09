@@ -1,0 +1,6 @@
+OPENSEADRAGON XOREND
+====================
+
+0.0.1
+This is a plugin for OpenSeadragon that adds the XOREND renderer.
+

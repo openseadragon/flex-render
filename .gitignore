@@ -1,0 +1,11 @@
+*.sublime-workspace
+node_modules
+build/
+sftp-config.json
+coverage/
+instrumented/
+.idea
+/nbproject/private/
+.directory
+local-test
+.DS_Store

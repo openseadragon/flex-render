@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: xoRend
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - given-names: Jiří "Jirka"
+    family-names: Horák
+  - given-names: Thomas
+    family-names: Pearce
+identifiers:
+  - type: url
+    value: https://openseadragon.github.io/
+    description: Homepage
+  - type: url
+    value: https://github.com/rationai/xorend
+    description: Repository
+repository-code: https://github.com/openseadragon/openseadragon
+url: https://openseadragon.github.io/
+abstract: "An open-source, web-based viewer for high-resolution zoomable images, implemented in pure JavaScript, for desktop and mobile."
+keywords:
+  - javascript
+  - image
+  - zooming
+  - renderer
+  - webgl
+  - high-resolution
+license: BSD-3-Clause
+version: 0.0.1
+date-released: 2025-07-08

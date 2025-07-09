@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+        <title>OpenSeadragon Filtering Plugin Demo</title>
+
+        <script type="text/javascript" src='/openseadragon/openseadragon.js'></script>
+        <script type="text/javascript" src='/build/openseadragon/xorend.js'></script>
+
+        <style>
+            textarea {
+                width: 900px;
+                padding: 10px;
+                font-size: 16px;
+                font-family: 'Courier New', Courier, monospace;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+                background-color: #fff;
+                resize: vertical;
+                display: block;
+                max-width: 90%;
+            }
+            button {
+                margin-top: 10px;
+                padding: 10px 20px;
+                font-size: 16px;
+                color: #fff;
+                background-color: #007bff;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            }
+            button:hover {
+                background-color: #0056b3;
+                display: block;
+            }
+        </style>
+
+        <script>
+            let _pA, _pB;
+
+            function executeScript() {
+                const scriptContent = document.getElementById("scriptInput").value;
+
+                try {
+                    eval(scriptContent);
+                    viewer.world.draw();
+                } catch (error) {
+                    alert("Error executing script: " + error.message);
+                }
+            }
+        </script>
+
+        <!-- JQuery -->
+        <script src="/test/lib/jquery-1.9.1.min.js"></script>
+        <link rel="stylesheet" href="/test/lib/jquery-ui-1.10.2/css/smoothness/jquery-ui-1.10.2.min.css">
+        <script src="/test/lib/jquery-ui-1.10.2/js/jquery-ui-1.10.2.min.js"></script>
+
+    </head>
+    <body>
+        <section class="home home-title" id="title-banner">
+            <h1>OpenSeadragon xORend Demo</h1>
+            <p>You can apply custom rendering configuration on the fly!</p>
+        </section>
+
+        <div style="display: flex; flex-direction: row; flex-wrap: wrap;">
+            <section class="demo" id="demo" style="width: 800px; height: 600px"></section>
+
+            <div>
+            <textarea id="scriptInput" rows="15" cols="120" placeholder="" style="height: 270px">
+// For now you have to move the viewport for changes to take effect (known bug).
+viewer.drawer.configureTiledImage(viewer.world.getItemAt(0), {
+    type: 'sobel',
+    params: {
+        use_gamma: 0.5,
+        // Sobel is set to compute edges across three channels, give 'baa' to show only blue channel edges (a is constant).
+        use_channel0: 'baa'
+    }
+});
+        </textarea>
+                <button onclick="executeScript()">Apply</button>
+
+            </div>
+
+        </div>
+
+        <script>
+            const viewer = window.viewer = OpenSeadragon({
+                id: "demo",
+                prefixUrl: "../../openseadragon/images/",
+                tileSources: "../data/iiif_2_0_sizes/info.json",
+                drawer: 'xo-rend',
+                crossOriginPolicy: 'Anonymous',
+                wrapHorizontal: true,
+                showNavigator: true,
+            });
+        </script>
+    </body>
+</html>
