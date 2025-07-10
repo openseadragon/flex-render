@@ -218,6 +218,7 @@ ${shader.getFragmentShaderExecution()}
             const previousShaderLayer = shaderMap[previousShaderID];
             const shaderConf = previousShaderLayer.getConfig();
 
+            const opacityModifier = previousShaderLayer.opacity ? `opacity * ${previousShaderLayer.opacity.sample()}` : 'opacity';
             if (shaderConf.type === "none" || shaderConf.error || !shaderConf.visible) {
                 //prevents the layer from being accounted for in the rendering (error or not visible)
 
@@ -252,13 +253,14 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(vec4(.0), intermediat
                     execution += `${getRemainingBlending()}
 // ${previousShaderLayer.constructor.type()} - Blending
 intermediate_color = ${previousShaderLayer.uid}_execution();
-intermediate_color.a = intermediate_color.a * opacity;`;
+intermediate_color.a = intermediate_color.a * ${opacityModifier};`;
+
                 remainingBlenForShaderID = previousShaderID;
             } else {
                 execution += `
 // ${previousShaderLayer.constructor.type()} - Clipmask
 clip_color = ${previousShaderLayer.uid}_execution();
-clip_color.a = clip_color.a * opacity;
+clip_color.a = clip_color.a * ${opacityModifier};
 intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermediate_color);`;
             }
         } // end of for cycle

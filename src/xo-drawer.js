@@ -30,6 +30,8 @@
         constructor(options){
             super(options);
 
+            // Navigator has viewer parent reference
+            this._isNavigatorDrawer = !!this.viewer.viewer;
             this._destroyed = false;
             this._backupCanvasDrawer = null;
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
@@ -145,17 +147,22 @@
         /**
          * If shaders are managed internally, tiled image can be configured a single custom
          * shader if desired. This shader is ignored if setRenderingConfig({...}) used.
-         * @param tiledImage
-         * @param shader
+         * @param {OpenSeadragon.TiledImage} tiledImage
+         * @param {ShaderConfig} shader
          */
         configureTiledImage(tiledImage, shader) {
-            shader.id = shader.id || this.constructor.idGenerator;
+            shader.id = shader.id || tiledImage.__shaderConfig.id || this.constructor.idGenerator;
             tiledImage.__shaderConfig = shader;
 
             // if already configured, request re-configuration
             if (tiledImage.__wglCompositeHandler) {
                 this.tiledImageCreated(tiledImage);
             }
+
+            if (!this._isNavigatorDrawer && this.viewer.navigator) {
+                this.viewer.navigator.drawer.configureTiledImage(tiledImage, shader);
+            }
+
             return shader;
         }
 
@@ -352,7 +359,7 @@
                 this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
                 this._rebuildHandle = null;
                 setTimeout(() => {
-                    this.viewer.world.needsDraw();
+                    this.viewer.forceRedraw();
                 });
             }, timeout);
         }
@@ -406,7 +413,7 @@
         draw(tiledImages) {
             // If we did not rebuild yet, avoid rendering - invalid program
             if (this._hasInvalidBuildState()) {
-                this.viewer.world.needsDraw(); //todo maybe force rebuild now and continue?
+                this.viewer.forceRedraw();
                 return;
             }
             const gl = this._gl;
@@ -565,7 +572,7 @@
             }
 
             if (!sources.length) {
-                this.viewer.world.needsDraw();
+                this.viewer.forceRedraw();
                 return;
             }
 
@@ -753,20 +760,40 @@
             // Todo: do we need to have c2d drawing output?
             // let canvas = $.makeNeutralElement("canvas");
 
+            const redraw = this._isNavigatorDrawer ? () => {} : () => {
+                const navigator = this.viewer.navigator;
+                if (navigator) {
+                    navigator.forceRedraw();
+                }
+                this.viewer.forceRedraw();
+            };
+
+            const resetItems = this._isNavigatorDrawer ? () => {} : () => {
+                const navigator = this.viewer.navigator;
+                if (navigator) {
+                    navigator.world.resetItems();
+                }
+                this.viewer.world.resetItems();
+            };
+
 
             // SETUP WEBGLMODULE
-            const rendererOptions = $.extend({
-                    // Allow override:
+            const rendererOptions = $.extend(
+                // Default
+                {
                     ready: () => {},
-                    resetCallback: () => { this.viewer.world.draw(); },
-                    refetchCallback: () => { this.viewer.world.resetItems(); },
                     debug: false,
                     webGLPreferredVersion: "2.0",
                 },
+                // User-defined
                 this.options,
+                // Required
                 {
-                    // Do not allow override:
+                    redrawCallback: redraw,
+                    refetchCallback: resetItems,
                     uniqueId: "osd_" + this._id,
+                    // Navigator must not have the handler since it would attempt to define the controls twice
+                    htmlHandler: this._isNavigatorDrawer ? null : this.options.htmlHandler,
                     canvasOptions: {
                         stencil: true
                     }
@@ -792,6 +819,9 @@
             canvas.height = viewportSize.y;
             return canvas;
         }
+
+
+
 
         /**
          * Get the backup renderer (CanvasDrawer) to use if data cannot be used by webgl

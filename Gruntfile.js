@@ -29,11 +29,13 @@ module.exports = function(grunt) {
         sources = [
             "src/webgl-renderer.js",
             "src/shader-layer.js",
+            "src/shader-controls.js",
             "src/webgl-context.js",
             "src/webgl2.js",
             "src/xo-drawer.js",
             "src/layers/edgeShader.js",
             "src/layers/plainShader.js",
+            "src/layers/heatmapShader.js"
         ];
 
     var banner = "//! <%= pkg.name %> <%= pkg.version %>\n" +

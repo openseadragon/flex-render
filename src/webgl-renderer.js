@@ -36,6 +36,15 @@
      */
 
     /**
+     * @typedef HTMLControlsHandler
+     * Function that attaches HTML controls for ShaderLayer's controls to DOM.
+     * @type function
+     * @param {OpenSeadragon.WebGLModule.ShaderLayer} [shaderLayer]
+     * @param {ShaderConfig} [shaderConfig]
+     * @returns {String}
+     */
+
+    /**
      * @typedef {Object} FPOutput
      * @typedef {Object} SPOutput
      */
@@ -64,10 +73,12 @@
          * @param {String} incomingOptions.webGLPreferredVersion    prefered WebGL version, "1.0" or "2.0"
          *
          * @param {Function} incomingOptions.ready                  function called when WebGLModule is ready to render
-         * @param {Function} incomingOptions.resetCallback          function called when user input changed; triggers re-render of the viewport
+         * @param {Function} incomingOptions.redrawCallback          function called when user input changed; triggers re-render of the viewport
          * @param {Function} incomingOptions.refetchCallback        function called when underlying data changed; triggers re-initialization of the whole WebGLDrawer
          * @param {Boolean} incomingOptions.debug                   debug mode on/off
          * @param {Boolean} incomingOptions.interactive             if true (default), the layers are configured for interactive changes (not applied by default)
+         * @param {HTMLControlsHandler} incomingOptions.htmlHandler function that ensures individual ShaderLayer's controls' HTML is properly present at DOM
+         * @param {function} incomingOptions.htmlReset              callback called when a program is reset - html needs to be cleaned
          *
          * @param {Object} incomingOptions.canvasOptions
          * @param {Boolean} incomingOptions.canvasOptions.alpha
@@ -89,10 +100,21 @@
 
 
             this.ready = incomingOptions.ready;
-            this.resetCallback = incomingOptions.resetCallback;
+            this.redrawCallback = incomingOptions.redrawCallback;
             this.refetchCallback = incomingOptions.refetchCallback;
             this.debug = incomingOptions.debug;
-            this.interactive = !!incomingOptions.interactive;
+            this.interactive = incomingOptions.interactive === undefined ?
+                !!incomingOptions.htmlHandler : !!incomingOptions.interactive;
+            this.htmlHandler = this.interactive ? incomingOptions.htmlHandler : null;
+
+            if (this.htmlHandler) {
+                if (!incomingOptions.htmlReset) {
+                    throw Error("$.WebGLModule::constructor: htmlReset callback is required when htmlHandler is set!");
+                }
+                this.htmlReset = incomingOptions.htmlReset;
+            } else {
+                this.htmlReset = () => {};
+            }
 
             this.running = false;           // boolean; true if WebGLModule is ready to render
             this._program = null;            // WebGLProgram
@@ -162,6 +184,17 @@
             this.canvas.height = height;
             this.gl.viewport(x, y, width, height);
             this.webglContext.setDimensions(x, y, width, height, levels);
+        }
+
+        /**
+         * Whether the WebGLModule creates HTML elements in the DOM for ShaderLayers' controls.
+         * @return {Boolean}
+         *
+         * @instance
+         * @memberof WebGLModule
+         */
+        supportsHtmlControls() {
+            return typeof this.htmlHandler === "function";
         }
 
         /**
@@ -259,7 +292,6 @@
 
             const needsUpdate = this._program.requiresLoad;
             this._program.requiresLoad = false;
-
             if (needsUpdate) {
                 /**
                  * todo better docs
@@ -277,8 +309,21 @@
                 //      - set their values to default,
                 //      - if interactive register event handlers to their corresponding DOM elements created in the previous step
 
-                //todo consider events, consider doing within webgl context
+                //todo a bit dirty.. consider events / consider doing within webgl context
                 if (name === "second-pass") {
+                    // generate HTML elements for ShaderLayer's controls and put them into the DOM
+                    if (this.htmlHandler) {
+                        this.htmlReset();
+
+                        for (const shaderLayer of Object.values(this._shaders)) {
+                            const shaderConfig = shaderLayer.__shaderConfig;
+                            this.htmlHandler(
+                                shaderLayer,
+                                shaderConfig
+                            );
+                        }
+                    }
+
                     for (const shaderLayer of Object.values(this._shaders)) {
                         shaderLayer.init();
                     }
@@ -291,13 +336,6 @@
                 this.running = true;
             }
             return needsUpdate;
-        }
-
-        /**
-         *
-         */
-        requireLoad() {
-            //todo delete? we should enable requirement to re-load programs! maybe call on each program if not specified
         }
 
         /**
@@ -352,7 +390,7 @@
                 interactive: this.interactive,
 
                 // callback to re-render the viewport
-                invalidate: this.resetCallback,
+                invalidate: this.redrawCallback,
                 // callback to rebuild the WebGL program
                 rebuild: () => {
                     this.registerProgram(null, this.webglContext.secondPassProgramKey);
@@ -430,6 +468,7 @@
         }
 
         destroy() {
+            this.htmlReset();
             for (let pId in this._programImplementations) {
                 this.deleteProgram(pId);
             }

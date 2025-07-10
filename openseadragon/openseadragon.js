@@ -31138,7 +31138,7 @@ $.extend( $.World.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.W
          * @param {String} incomingOptions.webGLPreferredVersion    prefered WebGL version, "1.0" or "2.0"
          *
          * @param {Function} incomingOptions.ready                  function called when WebGLModule is ready to render
-         * @param {Function} incomingOptions.resetCallback          function called when user input changed; triggers re-render of the viewport
+         * @param {Function} incomingOptions.redrawCallback          function called when user input changed; triggers re-render of the viewport
          * @param {Function} incomingOptions.refetchCallback        function called when underlying data changed; triggers re-initialization of the whole WebGLDrawer
          * @param {Boolean} incomingOptions.debug                   debug mode on/off
          * @param {Boolean} incomingOptions.interactive             if true (default), the layers are configured for interactive changes (not applied by default)
@@ -31163,7 +31163,7 @@ $.extend( $.World.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.W
 
 
             this.ready = incomingOptions.ready;
-            this.resetCallback = incomingOptions.resetCallback;
+            this.redrawCallback = incomingOptions.redrawCallback;
             this.refetchCallback = incomingOptions.refetchCallback;
             this.debug = incomingOptions.debug;
             this.interactive = !!incomingOptions.interactive;
@@ -31426,7 +31426,7 @@ $.extend( $.World.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.W
                 interactive: this.interactive,
 
                 // callback to re-render the viewport
-                invalidate: this.resetCallback,
+                invalidate: this.redrawCallback,
                 // callback to rebuild the WebGL program
                 rebuild: () => {
                     this.registerProgram(null, this.webglContext.secondPassProgramKey);

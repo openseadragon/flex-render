@@ -118,9 +118,11 @@
             this._cache = privateOptions.cache ? privateOptions.cache : {};
             this._customControls = privateOptions.params ? privateOptions.params : {};
 
+
             this.invalidate = privateOptions.invalidate;
             this._rebuild = privateOptions.rebuild;
             this._refetch = privateOptions.refetch;
+            this._controls = {};
 
             // channels used for sampling data from the texture
             this.__channels = null;
@@ -141,6 +143,8 @@
             this.resetMode(this._customControls);
             // set up the filters to be applied to sampled data from the texture
             this.resetFilters(this._customControls);
+            // build the ShaderLayer's controls
+            this._buildControls();
         }
 
         // STATIC METHODS
@@ -230,7 +234,12 @@
          * @member {object}
          */
         static get defaultControls() {
-            return {};
+            return {
+                opacity: {
+                    default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+                    accepts: (type, instance) => type === "float"
+                }
+            };
         }
 
         /**
@@ -258,6 +267,14 @@
          */
         getFragmentShaderDefinition() {
             const glsl = [];
+
+            for (const controlName in this._controls) {
+                let code = this[controlName].define();
+                if (code) {
+                    // trim removes whitespace from beggining and the end of the string
+                    glsl.push(code.trim());
+                }
+            }
             return glsl.join("\n    ");
         }
 
@@ -265,6 +282,78 @@
          * Initialize the ShaderLayer's controls.
          */
         init() {
+            for (const controlName in this._controls) {
+                const control = this[controlName];
+                control.init();
+            }
+        }
+
+        // CONTROLs LOGIC
+        /**
+         * Build the ShaderLayer's controls.
+         */
+        _buildControls() {
+            const defaultControls = this.constructor.defaultControls;
+
+            // add opacity control manually to every ShaderLayer; if not already defined
+            if (defaultControls.opacity === undefined || (typeof defaultControls.opacity === "object" && !defaultControls.opacity.accepts("float"))) {
+                defaultControls.opacity = {
+                    default: {type: "range", default: 1, min: 0, max: 1, step: 0.1, title: "Opacity: "},
+                    accepts: (type, instance) => type === "float"
+                };
+            }
+
+            for (let controlName in defaultControls) {
+                // with use_ prefix are defined not UI controls but filters, blend modes, etc.
+                if (controlName.startsWith("use_")) {
+                    continue;
+                }
+
+                // control is manually disabled
+                const controlConfig = defaultControls[controlName];
+                if (controlConfig === false) {
+                    continue;
+                }
+
+                const control = $.WebGLModule.UIControls.build(this, controlName, controlConfig, this.id + '_' + controlName, this._customControls[controlName]);
+                // enables iterating over the owned controls
+                this._controls[controlName] = control;
+                // simplify usage of controls (e.g. this.opacity instead of this._controls.opacity)
+                this[controlName] = control;
+            }
+        }
+
+        /**
+         * Get HTML code of the ShaderLayer's controls.
+         * @returns {String} HTML code
+         */
+        htmlControls() {
+            const controlsHtmls = [];
+            for (const controlName in this._controls) {
+                const control = this[controlName];
+                controlsHtmls.push(control.toHtml(true));
+            }
+            return controlsHtmls.join("");
+        }
+
+        /**
+         * Remove all ShaderLayer's controls.
+         */
+        removeControls() {
+            for (const controlName in this._controls) {
+                this.removeControl(controlName);
+            }
+        }
+
+        /**
+         * @param {String} controlName name of the control to remove
+         */
+        removeControl(controlName) {
+            if (!this._controls[controlName]) {
+                return;
+            }
+            delete this._controls[controlName];
+            delete this[controlName];
         }
 
         // GLSL LOGIC (getFragmentShaderDefinition and getFragmentShaderExecution could also have been placed in this section)
@@ -275,6 +364,9 @@
          * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
          */
         glLoaded(program, gl) {
+            for (const controlName in this._controls) {
+                this[controlName].glLoaded(program, gl);
+            }
         }
 
         /**
@@ -284,6 +376,9 @@
          * @param {WebGLRenderingContext|WebGL2RenderingContext} gl WebGL Context
          */
         glDrawing(program, gl) {
+            for (const controlName in this._controls) {
+                this[controlName].glDrawing(program, gl);
+            }
         }
 
         /**

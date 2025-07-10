@@ -41,14 +41,11 @@
         </style>
 
         <script>
-            let _pA, _pB;
-
             function executeScript() {
                 const scriptContent = document.getElementById("scriptInput").value;
 
                 try {
                     eval(scriptContent);
-                    viewer.world.draw();
                 } catch (error) {
                     alert("Error executing script: " + error.message);
                 }
@@ -69,24 +66,28 @@
 
         <div style="display: flex; flex-direction: row; flex-wrap: wrap;">
             <section class="demo" id="demo" style="width: 800px; height: 600px"></section>
+            <section id="my-shader-ui-container" style="width: 300px; padding: 10px; border: 1px solid #ccc; margin-left: 20px;">
+                <h2>Shader Layer Controls</h2>
+            </section>
 
             <div>
+            <div>The renderer is already configured to render UI controls.</div>
             <textarea id="scriptInput" rows="15" cols="120" placeholder="" style="height: 270px">
-// For now you have to move the viewport for changes to take effect (known bug).
 viewer.drawer.configureTiledImage(viewer.world.getItemAt(0), {
-    type: 'sobel',
+    name: 'Heatmap Example',  // try: 'Sobel filter',
+    type: 'heatmap',          // try: 'sobel',
     params: {
         use_gamma: 0.5,
         // Sobel is set to compute edges across three channels, give 'baa' to show only blue channel edges (a is constant).
-        use_channel0: 'baa'
+        use_channel0: 'b'
     }
 });
         </textarea>
                 <button onclick="executeScript()">Apply</button>
 
             </div>
-
         </div>
+
 
         <script>
             const viewer = window.viewer = OpenSeadragon({
@@ -94,6 +95,30 @@ viewer.drawer.configureTiledImage(viewer.world.getItemAt(0), {
                 prefixUrl: "../../openseadragon/images/",
                 tileSources: "../data/iiif_2_0_sizes/info.json",
                 drawer: 'xo-rend',
+                drawerOptions: {
+                    'xo-rend': {
+                        htmlHandler: (shaderLayer, shaderConfig) => {
+                            const container = document.getElementById('my-shader-ui-container');
+                            // Be careful, shaderLayer.id is changing. It should not be used as a key to identify the layer between
+                            // different programs such as in this case, but it's okay to use it when referencing concrete running layer.
+
+                            // Create custom layer controls - you can add more HTML controls allowing users to
+                            // control gamma, blending, or even change the shader type. Here we just show shader layer name + checkbox representing
+                            // its visibility (but we do not manage change event and thus users cannot change it). In case of error, we show
+                            // the error message below the checkbox.
+                            // The compulsory step is to include `shaderLayer.htmlControls()` output.
+                            container.insertAdjacentHTML('beforeend', `<div>
+    <input type="checkbox" disabled id="enable-layer-${shaderLayer.id}" ${shaderConfig.visible ? 'checked' : ''}><span>${shaderConfig.name || shaderConfig.type}</span>
+    <div>${shaderLayer.error || ""}</div>
+    ${shaderLayer.htmlControls()}
+</div>`);
+                        },
+                        htmlReset: () => {
+                            const container = document.getElementById('my-shader-ui-container');
+                            container.innerHTML = '';
+                        }
+                    }
+                },
                 crossOriginPolicy: 'Anonymous',
                 wrapHorizontal: true,
                 showNavigator: true,
