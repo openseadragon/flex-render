@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: xoRend
+title: Flex Renderer
 message: "If you use this software, please cite it using the metadata from this file."
 type: software
 authors:
@@ -12,9 +12,9 @@ identifiers:
     value: https://openseadragon.github.io/
     description: Homepage
   - type: url
-    value: https://github.com/rationai/xorend
+    value: https://github.com/openseadragon/flex-render
     description: Repository
-repository-code: https://github.com/openseadragon/openseadragon
+repository-code: https://github.com/openseadragon/flex-render
 url: https://openseadragon.github.io/
 abstract: "An open-source, web-based viewer for high-resolution zoomable images, implemented in pure JavaScript, for desktop and mobile."
 keywords:

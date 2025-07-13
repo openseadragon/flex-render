@@ -1,8 +1,8 @@
 (function($) {
-    $.WebGLModule.WebGL20 = class extends $.WebGLModule.WebGLImplementation {
+    $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     /**
      * Create a WebGL 2.0 rendering implementation.
-     * @param {OpenSeadragon.WebGLModule} renderer
+     * @param {OpenSeadragon.FlexRenderer} renderer
      * @param {WebGL2RenderingContext} gl
      */
     constructor(renderer, gl) {
@@ -21,8 +21,8 @@
 
     init() {
         //todo consider passing reference to this
-        this.renderer.registerProgram(new $.WebGLModule.WebGL20.FirstPassProgram(this, this.gl), "firstPass");
-        this.renderer.registerProgram(new $.WebGLModule.WebGL20.SecondPassProgram(this, this.gl), "secondPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl), "firstPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl), "secondPass");
     }
 
     getVersion() {
@@ -155,7 +155,7 @@ return blendAlpha(fg, bg, bg.rgb + fg.rgb - 2.0 * bg.rgb * fg.rgb);`,
 };
 
 
-$.WebGLModule.WebGL20.SecondPassProgram = class extends $.WebGLModule.Program {
+$.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.Program {
     constructor(context, gl) {
         super(context, gl);
         this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
@@ -175,7 +175,7 @@ $.WebGLModule.WebGL20.SecondPassProgram = class extends $.WebGLModule.Program {
             // Todo prevent unimportant first init build call
             this.vertexShader = this._getVertexShaderSource();
             this.fragmentShader = this._getFragmentShaderSource('', '',
-                '', $.WebGLModule.ShaderLayer.__globalIncludes);
+                '', $.FlexRenderer.ShaderLayer.__globalIncludes);
             return;
         }
         let definition = '',
@@ -270,7 +270,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         }
         this.vertexShader = this._getVertexShaderSource();
         this.fragmentShader = this._getFragmentShaderSource(definition, execution,
-            customBlendFunctions, $.WebGLModule.ShaderLayer.__globalIncludes);
+            customBlendFunctions, $.FlexRenderer.ShaderLayer.__globalIncludes);
     }
 
     /**
@@ -450,7 +450,7 @@ void main() {
     }
 };
 
-$.WebGLModule.WebGL20.FirstPassProgram = class extends $.WebGLModule.Program {
+$.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.Program {
 
     constructor(context, gl) {
         super(context, gl);

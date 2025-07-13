@@ -2,7 +2,7 @@
     /**
      * Identity shader
      */
-    $.WebGLModule.IdentityLayer = class extends $.WebGLModule.ShaderLayer {
+    $.FlexRenderer.IdentityLayer = class extends $.FlexRenderer.ShaderLayer {
 
         static get defaultControls() {
             return {
@@ -37,6 +37,6 @@
         }
     };
 
-    $.WebGLModule.ShaderMediator.registerLayer($.WebGLModule.IdentityLayer);
+    $.FlexRenderer.ShaderMediator.registerLayer($.FlexRenderer.IdentityLayer);
 
 })(OpenSeadragon);

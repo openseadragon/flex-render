@@ -1,5 +1,5 @@
 {
-    "name": "xorend",
+    "name": "flex-renderer",
     "version": "0.0.1",
     "description": "Versatile, GPU-accelerated renderer for OpenSeadragon.",
     "keywords": [
@@ -17,16 +17,16 @@
     "homepage": "https://openseadragon.github.io/",
     "funding": "https://opencollective.com/openseadragon",
     "bugs": {
-        "url": "https://github.com/openseadragon/openseadragon/issues"
+        "url": "https://github.com/openseadragon/flex-render/issues"
     },
     "license": "BSD-3-Clause",
     "files": [
         "build/openseadragon/"
     ],
-    "main": "build/openseadragon/openseadragon.js",
+    "main": "build/openseadragon/flex-renderer.js",
     "repository": {
         "type": "git",
-        "url": "https://github.com/openseadragon/openseadragon.git"
+        "url": "https://github.com/openseadragon/flex-render.git"
     },
     "devDependencies": {
         "eslint-plugin-compat": "^6.0.2",

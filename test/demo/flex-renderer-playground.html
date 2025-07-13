@@ -7,7 +7,7 @@
         <title>OpenSeadragon Filtering Plugin Demo</title>
 
         <script type="text/javascript" src='/openseadragon/openseadragon.js'></script>
-        <script type="text/javascript" src='/build/openseadragon/xorend.js'></script>
+        <script type="text/javascript" src='/build/openseadragon/flex-renderer.js'></script>
 
         <style>
             textarea {
@@ -47,7 +47,7 @@
                 try {
                     eval(scriptContent);
                 } catch (error) {
-                    alert("Error executing script: " + error.message);
+                    alert("Error executing script: " + (error.message || error));
                 }
             }
         </script>
@@ -60,7 +60,7 @@
     </head>
     <body>
         <section class="home home-title" id="title-banner">
-            <h1>OpenSeadragon xORend Demo</h1>
+            <h1>OpenSeadragon Flex Renderer Demo</h1>
             <p>You can apply custom rendering configuration on the fly!</p>
         </section>
 
@@ -94,9 +94,9 @@ viewer.drawer.configureTiledImage(viewer.world.getItemAt(0), {
                 id: "demo",
                 prefixUrl: "../../openseadragon/images/",
                 tileSources: "../data/iiif_2_0_sizes/info.json",
-                drawer: 'xo-rend',
+                drawer: 'flex-renderer',
                 drawerOptions: {
-                    'xo-rend': {
+                    'flex-renderer': {
                         htmlHandler: (shaderLayer, shaderConfig) => {
                             const container = document.getElementById('my-shader-ui-container');
                             // Be careful, shaderLayer.id is changing. It should not be used as a key to identify the layer between

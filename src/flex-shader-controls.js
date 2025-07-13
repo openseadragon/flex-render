@@ -7,10 +7,10 @@
      *  - registering an IComponent implementation (or an UiElement) in the factory results in its support
      *  among all the shaders (given the GLSL type, result of sample(...) matches).
      *  - UiElements are objects to create simple controls quickly and get rid of code duplicity,
-     *  for more info @see OpenSeadragon.WebGLModule.UIControls.register()
-     * @class OpenSeadragon.WebGLModule.UIControls
+     *  for more info @see OpenSeadragon.FlexRenderer.UIControls.register()
+     * @class OpenSeadragon.FlexRenderer.UIControls
      */
-    $.WebGLModule.UIControls = class {
+    $.FlexRenderer.UIControls = class {
         /**
          * Get all available control types
          * @return {string[]} array of available control types
@@ -38,7 +38,7 @@
          * Get an element used to create advanced controls, if you want
          * an implementation of simple controls, use build(...) to instantiate
          * @param {string} id type of the control
-         * @return {OpenSeadragon.WebGLModule.UIControls.IControl}
+         * @return {OpenSeadragon.FlexRenderer.UIControls.IControl}
          */
         static getUiClass(id) {
             let ctrl = this._impls[id];
@@ -51,12 +51,12 @@
 
         /**
          * Build UI control object based on given parameters
-         * @param {OpenSeadragon.WebGLModule.ShaderLayer} owner owner of the control, shaderLayer
+         * @param {OpenSeadragon.FlexRenderer.ShaderLayer} owner owner of the control, shaderLayer
          * @param {string} controlName name used for the control (eg.: opacity)
          * @param {object} controlObject object from shaderLayer.defaultControls, defines control
          * @param {string} controlId
          * @param {object|*} customParams parameters passed to the control (defined by the control) or set as default value if not object ({})
-         * @return {OpenSeadragon.WebGLModule.UIControls.IControl}
+         * @return {OpenSeadragon.FlexRenderer.UIControls.IControl}
          */
         static build(owner, controlName, controlObject, controlId, customParams = {}) {
             let defaultParams = controlObject.default,
@@ -98,7 +98,7 @@
 
             } else { // control's type (eg.: range/number/...) is defined in this._items
                 let intristicComponent = this.getUiElement(params.type);
-                let comp = new $.WebGLModule.UIControls.SimpleUIControl(
+                let comp = new $.FlexRenderer.UIControls.SimpleUIControl(
                     owner, controlName, controlId, params, intristicComponent
                 );
 
@@ -165,11 +165,11 @@
         /**
          * Register class as a UI control
          * @param {string} type unique control name / identifier
-         * @param {OpenSeadragon.WebGLModule.UIControls.IControl} cls to register, implementation class of the controls
+         * @param {OpenSeadragon.FlexRenderer.UIControls.IControl} cls to register, implementation class of the controls
          */
         static registerClass(type, cls) {
             //todo not really possible with syntax checker :/
-            // if ($.WebGLModule.UIControls.IControl.isPrototypeOf(cls)) {
+            // if ($.FlexRenderer.UIControls.IControl.isPrototypeOf(cls)) {
             cls.prototype.getName = () => type;
 
             if (this._items[type]) {
@@ -178,13 +178,13 @@
             cls._uiType = type;
             this._impls[type] = cls;
             // } else {
-            //     console.warn(`Skipping UI control '${type}': does not inherit from $.WebGLModule.UIControls.IControl.`);
+            //     console.warn(`Skipping UI control '${type}': does not inherit from $.FlexRenderer.UIControls.IControl.`);
             // }
         }
     };
 
     // Definitions of possible controls' types, simple functionalities:
-    $.WebGLModule.UIControls._items = {
+    $.FlexRenderer.UIControls._items = {
         number: {
             defaults: function() {
                 return {title: "Number", interactive: true, default: 0, min: 0, max: 100, step: 1};
@@ -298,18 +298,18 @@
     };
 
     // Implementation of UI control classes, complex functionalities.
-    $.WebGLModule.UIControls._impls = {
-        // e.g.: colormap: $.WebGLModule.UIControls.ColorMap
+    $.FlexRenderer.UIControls._impls = {
+        // e.g.: colormap: $.FlexRenderer.UIControls.ColorMap
     };
 
     /**
      * @interface
      */
-    $.WebGLModule.UIControls.IControl = class {
+    $.FlexRenderer.UIControls.IControl = class {
 
         /**
          * Sets common properties needed to create the controls:
-         *  this.context @extends WebGLModule.ShaderLayer - owner context
+         *  this.context @extends FlexRenderer.ShaderLayer - owner context
          *  this.name - name of the parameter for this.context.[load/store]Property(...) call
          *  this.id - unique ID for HTML id attribute, to be able to locate controls in DOM,
          *      created as ${uniq}${name}-${context.uid}
@@ -463,7 +463,7 @@
          *      - set change listeners, input values!
          */
         init() {
-            throw "WebGLModule.UIControls.IControl::init() must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::init() must be implemented.";
         }
 
         /**
@@ -475,7 +475,7 @@
          *    values between 5 and 42, the value can be '6' or 6 or 6.15
          */
         set(encodedValue) {
-            throw "WebGLModule.UIControls.IControl::set() must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::set() must be implemented.";
         }
 
         /**
@@ -485,7 +485,7 @@
          */
         glDrawing(program, gl) {
             //the control should send something to GPU
-            throw "WebGLModule.UIControls.IControl::glDrawing() must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::glDrawing() must be implemented.";
         }
 
         /**
@@ -495,7 +495,7 @@
          */
         glLoaded(program, gl) {
             //the control should send something to GPU
-            throw "WebGLModule.UIControls.IControl::glLoaded() must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::glLoaded() must be implemented.";
         }
 
         /**
@@ -509,7 +509,7 @@
          *  - do not allow changes before init call, these changes must happen at constructor
          */
         toHtml(breakLine = true, controlCss = "") {
-            throw "WebGLModule.UIControls.IControl::toHtml() must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::toHtml() must be implemented.";
         }
 
         /**
@@ -517,7 +517,7 @@
          *  - should use variable names derived from this.webGLVariableName
          */
         define() {
-            throw "WebGLModule.UIControls.IControl::define() must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::define() must be implemented.";
         }
 
         /**
@@ -531,7 +531,7 @@
          * @return {string} valid GLSL oneliner (wihtout ';') for sampling the value, or invalid code (e.g. error message) to signal error
          */
         sample(value = undefined, valueGlType = 'void') {
-            throw "WebGLModule.UIControls.IControl::sample() must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::sample() must be implemented.";
         }
 
         /**
@@ -545,7 +545,7 @@
          * @return {{}} name: default value mapping
          */
         get supports() {
-            throw "WebGLModule.UIControls.IControl::supports must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::supports must be implemented.";
         }
 
         /**
@@ -558,7 +558,7 @@
          * @return {{}}
          */
         get supportsAll() {
-            throw "WebGLModule.UIControls.IControl::typeDefs must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::typeDefs must be implemented.";
         }
 
         /**
@@ -566,7 +566,7 @@
          * @return {string}
          */
         get type() {
-            throw "WebGLModule.UIControls.IControl::type must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::type must be implemented.";
         }
 
         /**
@@ -575,7 +575,7 @@
          * @return {any}
          */
         get raw() {
-            throw "WebGLModule.UIControls.IControl::raw must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::raw must be implemented.";
         }
 
         /**
@@ -583,7 +583,7 @@
          * @return {any}
          */
         get encoded() {
-            throw "WebGLModule.UIControls.IControl::encoded must be implemented.";
+            throw "FlexRenderer.UIControls.IControl::encoded must be implemented.";
         }
 
         //////////////////////////////////////
@@ -721,11 +721,11 @@
      * of the input and the parametrization.
      *
      * Further parameters passed are dependent on the control type, see
-     * @ WebGLModule.UIControls
+     * @ FlexRenderer.UIControls
      *
-     * @class WebGLModule.UIControls.SimpleUIControl
+     * @class FlexRenderer.UIControls.SimpleUIControl
      */
-    $.WebGLModule.UIControls.SimpleUIControl = class extends $.WebGLModule.UIControls.IControl {
+    $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIControls.IControl {
         /**
          * Uses intristicComponent from UIControls._items that corresponds to type of this control.
          * @param {ShaderLayer} owner owner of the control (shaderLayer)
@@ -777,7 +777,7 @@
                     node.value = this.encodedValue;
                     node.addEventListener('change', updater);
                 } else {
-                    console.error('$.WebGLModule.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
+                    console.error('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
                 }
             }
         }
@@ -852,14 +852,14 @@
         }
     };
 
-    $.WebGLModule.UIControls.SliderWithInput = class extends $.WebGLModule.UIControls.IControl {
+    $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIControls.IControl {
         constructor(context, name, webGLVariableName, params) {
             super(context, name, webGLVariableName);
-            this._c1 = new $.WebGLModule.UIControls.SimpleUIControl(
-                context, name, webGLVariableName, params, $.WebGLModule.UIControls.getUiElement('range'));
+            this._c1 = new $.FlexRenderer.UIControls.SimpleUIControl(
+                context, name, webGLVariableName, params, $.FlexRenderer.UIControls.getUiElement('range'));
             params.title = "";
-            this._c2 = new $.WebGLModule.UIControls.SimpleUIControl(
-                context, name, webGLVariableName, params, $.WebGLModule.UIControls.getUiElement('number'), "second-");
+            this._c2 = new $.FlexRenderer.UIControls.SimpleUIControl(
+                context, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
         }
 
         init() {
@@ -875,6 +875,8 @@
             this._c2.on("default", function(value, encoded, context) {
                 document.getElementById(_this._c1.id).value = encoded;
                 _this._c1.value = value;
+                // Only C1 loads values to gpu, request change
+                _this._c1._needsLoad = true;
                 _this.changed("default", value, encoded, context);
             }, true); //silently fail if registered
         }
@@ -924,5 +926,5 @@
             return this._c1.encoded;
         }
     };
-    $.WebGLModule.UIControls.registerClass("range_input", $.WebGLModule.UIControls.SliderWithInput);
+    $.FlexRenderer.UIControls.registerClass("range_input", $.FlexRenderer.UIControls.SliderWithInput);
 })(OpenSeadragon);

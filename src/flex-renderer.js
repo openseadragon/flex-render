@@ -39,7 +39,7 @@
      * @typedef HTMLControlsHandler
      * Function that attaches HTML controls for ShaderLayer's controls to DOM.
      * @type function
-     * @param {OpenSeadragon.WebGLModule.ShaderLayer} [shaderLayer]
+     * @param {OpenSeadragon.FlexRenderer.ShaderLayer} [shaderLayer]
      * @param {ShaderConfig} [shaderConfig]
      * @returns {String}
      */
@@ -59,11 +59,11 @@
      * @property {RegExp} idPattern
      * @property {Object} BLEND_MODE
      *
-     * @class OpenSeadragon.WebGLModule
+     * @class OpenSeadragon.FlexRenderer
      * @classdesc class that manages ShaderLayers, their controls, and WebGLContext to allow rendering using WebGL
      * @memberof OpenSeadragon
      */
-    $.WebGLModule = class extends $.EventSource {
+    $.FlexRenderer = class extends $.EventSource {
 
         /**
          * @param {Object} incomingOptions
@@ -72,7 +72,7 @@
          *
          * @param {String} incomingOptions.webGLPreferredVersion    prefered WebGL version, "1.0" or "2.0"
          *
-         * @param {Function} incomingOptions.ready                  function called when WebGLModule is ready to render
+         * @param {Function} incomingOptions.ready                  function called when FlexRenderer is ready to render
          * @param {Function} incomingOptions.redrawCallback          function called when user input changed; triggers re-render of the viewport
          * @param {Function} incomingOptions.refetchCallback        function called when underlying data changed; triggers re-initialization of the whole WebGLDrawer
          * @param {Boolean} incomingOptions.debug                   debug mode on/off
@@ -86,13 +86,13 @@
          * @param {Boolean} incomingOptions.canvasOptions.stencil
          *
          * @constructor
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         constructor(incomingOptions) {
             super();
 
             if (!this.constructor.idPattern.test(incomingOptions.uniqueId)) {
-                throw new Error("$.WebGLModule::constructor: invalid ID! Id can contain only letters, numbers and underscore. ID: " + incomingOptions.uniqueId);
+                throw new Error("$.FlexRenderer::constructor: invalid ID! Id can contain only letters, numbers and underscore. ID: " + incomingOptions.uniqueId);
             }
             this.uniqueId = incomingOptions.uniqueId;
 
@@ -109,14 +109,14 @@
 
             if (this.htmlHandler) {
                 if (!incomingOptions.htmlReset) {
-                    throw Error("$.WebGLModule::constructor: htmlReset callback is required when htmlHandler is set!");
+                    throw Error("$.FlexRenderer::constructor: htmlReset callback is required when htmlHandler is set!");
                 }
                 this.htmlReset = incomingOptions.htmlReset;
             } else {
                 this.htmlReset = () => {};
             }
 
-            this.running = false;           // boolean; true if WebGLModule is ready to render
+            this.running = false;           // boolean; true if FlexRenderer is ready to render
             this._program = null;            // WebGLProgram
             this._shaders = {};
             this._shadersOrder = [];
@@ -125,29 +125,29 @@
             this.canvasContextOptions = incomingOptions.canvasOptions;
             const canvas = document.createElement("canvas");
             const WebGLImplementation = this.constructor.determineContext(this.webGLPreferredVersion);
-            const webGLRenderingContext = $.WebGLModule.WebGLImplementation.createWebglContext(canvas, this.webGLPreferredVersion, this.canvasContextOptions);
+            const webGLRenderingContext = $.FlexRenderer.WebGLImplementation.createWebglContext(canvas, this.webGLPreferredVersion, this.canvasContextOptions);
             if (webGLRenderingContext) {
                 this.gl = webGLRenderingContext;                                            // WebGLRenderingContext|WebGL2RenderingContext
-                this.webglContext = new WebGLImplementation(this, webGLRenderingContext);   // $.WebGLModule.WebGLImplementation
+                this.webglContext = new WebGLImplementation(this, webGLRenderingContext);   // $.FlexRenderer.WebGLImplementation
                 this.canvas = canvas;
 
                 // Should be last call of the constructor to make sure everything is initialized
                 this.webglContext.init();
             } else {
-                throw new Error("$.WebGLModule::constructor: Could not create WebGLRenderingContext!");
+                throw new Error("$.FlexRenderer::constructor: Could not create WebGLRenderingContext!");
             }
         }
 
         /**
-         * Search through all WebGLModule properties to find one that extends WebGLImplementation and it's getVersion() method returns <version> input parameter.
+         * Search through all FlexRenderer properties to find one that extends WebGLImplementation and it's getVersion() method returns <version> input parameter.
          * @param {String} version WebGL version, "1.0" or "2.0"
          * @returns {WebGLImplementation}
          *
          * @instance
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         static determineContext(version) {
-            const namespace = $.WebGLModule;
+            const namespace = $.FlexRenderer;
             for (let property in namespace) {
                 const context = namespace[ property ],
                     proto = context.prototype;
@@ -157,7 +157,7 @@
                 }
             }
 
-            throw new Error("$.WebGLModule::determineContext: Could not find WebGLImplementation with version " + version);
+            throw new Error("$.FlexRenderer::determineContext: Could not find WebGLImplementation with version " + version);
         }
 
         /**
@@ -177,7 +177,7 @@
          * @param {Number} levels number of layers that are rendered, kind of 'depth' parameter, an integer
          *
          * @instance
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         setDimensions(x, y, width, height, levels) {
             this.canvas.width = width;
@@ -187,11 +187,11 @@
         }
 
         /**
-         * Whether the WebGLModule creates HTML elements in the DOM for ShaderLayers' controls.
+         * Whether the FlexRenderer creates HTML elements in the DOM for ShaderLayers' controls.
          * @return {Boolean}
          *
          * @instance
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         supportsHtmlControls() {
             return typeof this.htmlHandler === "function";
@@ -202,7 +202,7 @@
          * @param {FPRenderPackage[]} source
          * @return {FPOutput}
          * @instance
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         firstPassProcessData(source) {
             const program = this._programImplementations[this.webglContext.firstPassProgramKey];
@@ -228,13 +228,13 @@
 
         /**
          * Create and load the new WebGLProgram based on ShaderLayers and their controls.
-         * @param {OpenSeadragon.WebGLModule.Program} program
+         * @param {OpenSeadragon.FlexRenderer.Program} program
          * @param {String} [key] optional ID for the program to use
          * @return {String} ID for the program it was registered with
          *
          * @instance
          * @protected
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         registerProgram(program, key = undefined) {
             key = key || String(Date.now());
@@ -259,7 +259,7 @@
             }
 
             this._programImplementations[key] = program;
-            if ($.WebGLModule.WebGLImplementation._compileProgram(
+            if ($.FlexRenderer.WebGLImplementation._compileProgram(
                 webglProgram, this.gl, program, $.console.error, this.debug
             )) {
                 program.created(webglProgram, this.canvas.width, this.canvas.height);
@@ -270,14 +270,14 @@
 
         /**
          * Switch program
-         * @param {OpenSeadragon.WebGLModule.Program|string} program instance or program key to use
+         * @param {OpenSeadragon.FlexRenderer.Program|string} program instance or program key to use
          * @param {string} name "first-pass" or "second-pass"
          * @return {boolean} false if update is not necessary, true if update was necessary -- updates
          * are initialization steps taken once after program is first loaded (after compilation)
          * or when explicitly re-requested
          */
         useProgram(program, name) {
-            if (!(program instanceof $.WebGLModule.Program)) {
+            if (!(program instanceof $.FlexRenderer.Program)) {
                 program = this.getProgram(program);
             }
 
@@ -341,7 +341,7 @@
         /**
          *
          * @param {string} programKey
-         * @return {OpenSeadragon.WebGLModule.Program}
+         * @return {OpenSeadragon.FlexRenderer.Program}
          */
         getProgram(programKey) {
             return this._programImplementations[programKey];
@@ -368,12 +368,12 @@
          * @returns {ShaderLayer} instance of the created shaderLayer
          *
          * @instance
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         createShaderLayer(id, shaderConfig) {
-            const Shader = $.WebGLModule.ShaderMediator.getClass(shaderConfig.type);
+            const Shader = $.FlexRenderer.ShaderMediator.getClass(shaderConfig.type);
             if (!Shader) {
-                throw new Error(`$.WebGLModule::createShaderLayer: Unknown shader type '${shaderConfig.type}'!`);
+                throw new Error(`$.FlexRenderer::createShaderLayer: Unknown shader type '${shaderConfig.type}'!`);
             }
 
             if (shaderConfig.visible === undefined) {
@@ -430,7 +430,7 @@
          * @param {string} id shader id
          *
          * @instance
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         removeShader(id) {
             const shader = this._shaders[id];
@@ -454,7 +454,7 @@
          * @param {Boolean} enabled if true enable alpha blending, otherwise disable blending
          *
          * @instance
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         setDataBlendingEnabled(enabled) {
             if (enabled) {
@@ -480,14 +480,14 @@
 
     // STATIC PROPERTIES
     /**
-     * ID pattern allowed for WebGLModule. ID's are used in GLSL to distinguish uniquely between individual ShaderLayer's generated code parts
+     * ID pattern allowed for FlexRenderer. ID's are used in GLSL to distinguish uniquely between individual ShaderLayer's generated code parts
      * @property
      * @type {RegExp}
-     * @memberof WebGLModule
+     * @memberof FlexRenderer
      */
-    $.WebGLModule.idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
+    $.FlexRenderer.idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
 
-    $.WebGLModule.BLEND_MODE = [
+    $.FlexRenderer.BLEND_MODE = [
         'mask',
         'source-over',
         'source-in',
@@ -516,7 +516,7 @@
         'luminosity',
     ];
 
-    $.WebGLModule.jsonReplacer = function (key, value) {
+    $.FlexRenderer.jsonReplacer = function (key, value) {
         return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
     };
 })(OpenSeadragon);

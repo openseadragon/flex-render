@@ -20,8 +20,8 @@ All command-line operations for building and testing OpenSeadragon are scripted 
 
 1. Install Node, if you haven't already (available at the link above)
 1. Install the Grunt command line runner (if you haven't already); on the command line, run `npm install -g grunt-cli`
-1. Clone the xORend repository
-1. On the command line, go in to the xorend folder
+1. Clone the Flex Renderer repository
+1. On the command line, go in to the repository folder
 1. Run `npm install`
 
 You're set, all development dependencies should have been installed and the project built...

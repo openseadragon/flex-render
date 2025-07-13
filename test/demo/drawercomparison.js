@@ -16,7 +16,7 @@ const labels = {
 const drawers = {
     canvas: "Context2d drawer (default in OSD &lt;= 4.1.0)",
     webgl: "WebGL drawer",
-    "xo-rend": "xORend Renderer"
+    "flex-renderer": "Flex Renderer"
 }
 
 //Support drawer type from the url
@@ -27,7 +27,7 @@ const formKeepSearchParams = url.searchParams.toString();
 
 const selectedWebglVersion = url.searchParams.get("webgl-version") || "2.0";
 const drawerOptions = {
-    "xo-rend": {
+    "flex-renderer": {
         debug: true,
         webGLPreferredVersion: selectedWebglVersion
     }
@@ -277,7 +277,7 @@ $('.image-options select[data-field=shader-type]').on('change',function(){
     const tiledImages = ['item1', 'item2']
         .map(selector => $(`#image-picker input.toggle[data-image=${data.image}]`).data(selector)).filter(Boolean);
 
-    [viewer1, viewer2].filter(w => w.drawer.getType() === "xo-rend").forEach(w => {
+    [viewer1, viewer2].filter(w => w.drawer.getType() === "flex-renderer").forEach(w => {
         const drawer = w.drawer;
         tiledImages.forEach(tiledImage => {
             drawer.configureTiledImage(tiledImage, {
@@ -364,9 +364,9 @@ function addOptionToForm(html) {
 
 function makeImagePickerElement(key, label){
     let shaderSelector = "";
-    if (drawer1 === "xo-rend" || drawer2 === "xo-rend") {
+    if (drawer1 === "flex-renderer" || drawer2 === "flex-renderer") {
         const map = {};
-        for (let shader of OpenSeadragon.WebGLModule.ShaderMediator.availableShaders()) {
+        for (let shader of OpenSeadragon.FlexRenderer.ShaderMediator.availableShaders()) {
             map[shader.type()] = shader.name();
         }
         shaderSelector = `<label>Shader: ${getSelectForValues("shader-type", "identity", map)}</label>`;
@@ -406,11 +406,11 @@ addOptionToForm(`
 </div>`);
 
 
-if (drawer1 === "xo-rend" || drawer2 === "xo-rend") {
+if (drawer1 === "flex-renderer" || drawer2 === "flex-renderer") {
     // Setup for modular renderer
     addOptionToForm(`
 <div>
-    For xORend Renderer, a webgl version of a choice can be used:
+    For Flex Renderer, a webgl version of a choice can be used:
      ${getSelectForValues("webgl-version", selectedWebglVersion, {"1.0": "WebGL 1", "2.0": "WebGL 2"})}
 </div>`);
 

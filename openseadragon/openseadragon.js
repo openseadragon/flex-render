@@ -1,6 +1,6 @@
 //! openseadragon 5.0.1
-//! Built on 2025-07-08
-//! Git commit: v3.0.0-1008-64734b9c-dirty
+//! Built on 2025-07-13
+//! Git commit: v3.0.0-1048-c8b2049a-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -3222,32 +3222,21 @@ class Mat3{
 
     /**
      * @alias multiply
-     * @memberof OpenSeadragon.Mat3
+     * @memberof! OpenSeadragon.Mat3
      * @param {OpenSeadragon.Mat3} other the matrix to multiply with
      * @returns {OpenSeadragon.Mat3} The result of matrix multiplication
      */
     multiply(other) {
-        const a = this.values;
-        const b = other.values;
+        let a = this.values;
+        let b = other.values;
 
-        const a00 = a[0 * 3 + 0];
-        const a01 = a[0 * 3 + 1];
-        const a02 = a[0 * 3 + 2];
-        const a10 = a[1 * 3 + 0];
-        const a11 = a[1 * 3 + 1];
-        const a12 = a[1 * 3 + 2];
-        const a20 = a[2 * 3 + 0];
-        const a21 = a[2 * 3 + 1];
-        const a22 = a[2 * 3 + 2];
-        const b00 = b[0 * 3 + 0];
-        const b01 = b[0 * 3 + 1];
-        const b02 = b[0 * 3 + 2];
-        const b10 = b[1 * 3 + 0];
-        const b11 = b[1 * 3 + 1];
-        const b12 = b[1 * 3 + 2];
-        const b20 = b[2 * 3 + 0];
-        const b21 = b[2 * 3 + 1];
-        const b22 = b[2 * 3 + 2];
+        const a00 = a[0 * 3 + 0], a01 = a[0 * 3 + 1], a02 = a[0 * 3 + 2];
+        const a10 = a[1 * 3 + 0], a11 = a[1 * 3 + 1], a12 = a[1 * 3 + 2];
+        const a20 = a[2 * 3 + 0], a21 = a[2 * 3 + 1], a22 = a[2 * 3 + 2];
+        const b00 = b[0 * 3 + 0], b01 = b[0 * 3 + 1], b02 = b[0 * 3 + 2];
+        const b10 = b[1 * 3 + 0], b11 = b[1 * 3 + 1], b12 = b[1 * 3 + 2];
+        const b20 = b[2 * 3 + 0], b21 = b[2 * 3 + 1], b22 = b[2 * 3 + 2];
+
         return new Mat3([
             b00 * a00 + b01 * a10 + b02 * a20,
             b00 * a01 + b01 * a11 + b02 * a21,
@@ -3260,7 +3249,6 @@ class Mat3{
             b20 * a02 + b21 * a12 + b22 * a22,
         ]);
     }
-
 
     /**
      * Sets the values of the matrix.
@@ -3316,7 +3304,7 @@ class Mat3{
 
     /**
      * Scaling & translation only changes certain values, no need to compute full matrix multiplication.
-     * Optimization: if we can modify the current matrix in place, allow doing so.
+     * Optimization: in case the original matrix can be thrown away, optimize instead by computing in-place.
      * @memberof OpenSeadragon.Mat3
      */
     scaleAndTranslateSelf(sx, sy, tx, ty) {
@@ -3324,7 +3312,6 @@ class Mat3{
 
         const m00 = a[0], m01 = a[1], m02 = a[2];
         const m10 = a[3], m11 = a[4], m12 = a[5];
-
 
         a[0] = sx * m00;
         a[1] = sx * m01;
@@ -3341,10 +3328,14 @@ class Mat3{
 
     /**
      * Move and translate another matrix by self. 'this' matrix must be scale & translate matrix.
-     * Used for optimization: we have shared matrix that we need to
-     *  - move & scale by the current matrix, and
-     *  - store the result to this matrix, since we don't need to keep the scaling and translation, but
-     *    we need to keep the original shared matrix (for each tile within tiled image).
+     * Optimization: in case the original matrix can be thrown away, optimize instead by computing in-place.
+     * Used for optimization: we have
+     * A) THIS matrix, carrying scale and translation,
+     * B) OTHER general matrix to scale and translate.
+     * Since THIS matrix is unique per tile, we can optimize the operation by:
+     *  - move & scale OTHER by THIS, and
+     *  - store the result to THIS, since we don't need to keep the scaling and translation, but
+     *    we need to keep the original OTHER matrix (for each tile within tiled image).
      * @param {OpenSeadragon.Mat3} other the matrix to scale and translate by this matrix and accept values from
      * @memberof OpenSeadragon.Mat3
      */
@@ -3370,8 +3361,6 @@ class Mat3{
         out[6] = tx * a[0] + ty * a[3] + a[6];
         out[7] = tx * a[1] + ty * a[4] + a[7];
         out[8] = tx * a[2] + ty * a[5] + a[8];
-
-        return this;
     }
 }
 
@@ -8463,6 +8452,23 @@ $.Viewer = function( options ) {
 
     this._fullyLoaded = false; // variable used to track the viewer's aggregate loading state.
 
+    this._navActionFrames = {};     // tracks cumulative pan distance per key press
+    this._navActionVirtuallyHeld = {};   // marks keys virtually held after early release
+    this._minNavActionFrames = 10;      // minimum pan distance per tap or key press
+
+    this._activeActions = { // variable to keep track of currently pressed action
+        // Basic arrow key panning (no modifiers)
+        panUp: false,
+        panDown: false,
+        panLeft: false,
+        panRight: false,
+
+        // Modifier-based actions
+        zoomIn: false,    // Shift + Up
+        zoomOut: false    // Shift + Down
+    };
+
+
     //Inherit some behaviors and properties
     $.EventSource.call( this );
 
@@ -8542,6 +8548,7 @@ $.Viewer = function( options ) {
         dblClickDistThreshold:    this.dblClickDistThreshold,
         contextMenuHandler:       $.delegate( this, onCanvasContextMenu ),
         keyDownHandler:           $.delegate( this, onCanvasKeyDown ),
+        keyUpHandler:             $.delegate(this, onCanvasKeyUp),
         keyHandler:               $.delegate( this, onCanvasKeyPress ),
         clickHandler:             $.delegate( this, onCanvasClick ),
         dblClickHandler:          $.delegate( this, onCanvasDblClick ),
@@ -8781,7 +8788,7 @@ $.Viewer = function( options ) {
             crossOriginPolicy: this.crossOriginPolicy,
             animationTime:     this.animationTime,
             drawer:            this.drawer.getType(),
-            // TODO: drawer options are not passed through!
+            drawerOptions:     this.drawerOptions,
             loadTilesWithAjax: this.loadTilesWithAjax,
             ajaxHeaders:       this.ajaxHeaders,
             ajaxWithCredentials: this.ajaxWithCredentials,
@@ -9128,7 +9135,6 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
         this.world.removeAll();
         this.tileCache.clear();
         this.imageLoader.clear();
-
         /**
          * Raised when the viewer is closed (see {@link OpenSeadragon.Viewer#close}).
          *
@@ -9271,6 +9277,14 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
     },
 
     /**
+     * Check if the viewer has been destroyed or not yet initialized.
+     * @return {boolean}
+     */
+    isDestroyed() {
+        return !THIS[ this.hash ];
+    },
+
+    /**
      * Request a drawer for this viewer, as a supported string or drawer constructor.
      * @param {String | OpenSeadragon.DrawerBase} drawerCandidate The type of drawer to try to construct.
      * @param { Object } options
@@ -9303,7 +9317,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
             Drawer = $.determineDrawer(drawerCandidate);
         }
 
-        if(!Drawer){
+        if (!Drawer) {
             $.console.warn('Unsupported drawer %s! Drawer must be an existing string type, or a class that extends OpenSeadragon.DrawerBase.', drawerCandidate);
         }
 
@@ -9728,7 +9742,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
             return this;
         }
 
-        var fullScreeEventArgs = {
+        var fullScreenEventArgs = {
             fullScreen: fullScreen,
             preventDefaultAction: false
         };
@@ -9746,8 +9760,8 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
          * @property {Boolean} preventDefaultAction - Set to true to prevent full-screen mode change. Default: false.
          * @property {?Object} userData - Arbitrary subscriber-defined object.
          */
-        this.raiseEvent( 'pre-full-screen', fullScreeEventArgs );
-        if ( fullScreeEventArgs.preventDefaultAction ) {
+        this.raiseEvent( 'pre-full-screen', fullScreenEventArgs );
+        if ( fullScreenEventArgs.preventDefaultAction ) {
             return this;
         }
 
@@ -9766,6 +9780,12 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
             this.element.style.height = '100%';
 
             var onFullScreenChange = function() {
+                if (!THIS[ _this.hash ]) {
+                    $.removeEvent( document, $.fullScreenEventName, onFullScreenChange );
+                    $.removeEvent( document, $.fullScreenErrorEventName, onFullScreenChange );
+                    return;
+                }
+
                 var isFullScreen = $.isFullScreen();
                 if ( !isFullScreen ) {
                     $.removeEvent( document, $.fullScreenEventName, onFullScreenChange );
@@ -10109,9 +10129,12 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                     });
                 }
 
-                // This is necessary since drawer needs to react upon finalized tiled image, after
-                // all events have been processed.
-                _this.drawer.tiledImageCreated(tiledImage);
+                // It might happen processReadyItems() is called after viewer.destroy()
+                if (_this.drawer) {
+                    // This is necessary since drawer might react upon finalized tiled image, after
+                    // all events have been processed.
+                    _this.drawer.tiledImageCreated(tiledImage);
+                }
             }
         }
 
@@ -11080,8 +11103,7 @@ function getTileSourceImplementation( viewer, tileSource, imgOptions, successCal
                 crossOriginPolicy: imgOptions.crossOriginPolicy !== undefined ?
                     imgOptions.crossOriginPolicy : viewer.crossOriginPolicy,
                 ajaxWithCredentials: viewer.ajaxWithCredentials,
-                ajaxHeaders: imgOptions.ajaxHeaders ?
-                    imgOptions.ajaxHeaders : viewer.ajaxHeaders,
+                ajaxHeaders: $.extend({}, viewer.ajaxHeaders, imgOptions.ajaxHeaders),
                 splitHashDataForPost: viewer.splitHashDataForPost,
                 success: function( event ) {
                     successCallback( event.tileSource );
@@ -11319,7 +11341,76 @@ function onCanvasContextMenu( event ) {
     event.preventDefault = eventArgs.preventDefault;
 }
 
+/**
+ * Maps keyboard events to corresponding navigation actions,
+ * accounting for Shift modifier state.
+ *
+ * @private
+ * @param {Object} event - Keyboard event object
+ * Returns string Navigation action name (e.g. 'panUp') or null if unmapped
+ *
+ * Handles:
+ * - Arrow/WASD keys with Shift for zoom
+ * - Arrow/WASD keys without Shift for panning
+ * - Equal(=)/Minus(-) keys for zoom
+ */
+function getActiveActionFromKey(code, shift) {
+    switch (code) {
+        case 'ArrowUp':
+        case 'KeyW':
+            return shift ? 'zoomIn' : 'panUp';
+        case 'ArrowDown':
+        case 'KeyS':
+            return shift ? 'zoomOut' : 'panDown';
+        case 'ArrowLeft':
+        case 'KeyA':
+            return 'panLeft';
+        case 'ArrowRight':
+        case 'KeyD':
+            return 'panRight';
+        case 'Equal':
+            return 'zoomIn';
+        case 'Minus':
+            return 'zoomOut';
+        default:
+            return null;
+    }
+}
+
+/**
+ * Handles the keyup event on the viewer's canvas element.
+ *
+ * @private
+ * For the released key, marks both the shifted and non-shifted navigation actions as inactive in the _activeActions object.
+ * If either action is released before reaching the minimum frame threshold, sets that action as "virtually held" in _navActionVirtuallyHeld,
+ * ensuring smooth completion of the minimum pan or zoom distance regardless of modifier key release order.
+ */
+function onCanvasKeyUp(event) {
+
+    // Using arrow function to inherit 'this' from parent scope
+    const processCombo = (code, shift) => {
+        const action = getActiveActionFromKey(code, shift);
+
+        if (action && this._activeActions[action]) {
+            this._activeActions[action] = false;
+            // If the action was released before the minimum frame threshold,
+            // keep it "virtually held" for smoothness
+            if (this._navActionFrames[action] < this._minNavActionFrames) {
+                this._navActionVirtuallyHeld[action] = true;
+            }
+        }
+    };
+
+    // We don't know if the shift key was held down originally, so we check them both.
+    // Clear both possible actions for this key
+    const code = event.originalEvent.code;
+    processCombo(code, true);
+    processCombo(code, false);
+}
+
+
 function onCanvasKeyDown( event ) {
+
     var canvasKeyDownEventArgs = {
       originalEvent: event.originalEvent,
       preventDefaultAction: false,
@@ -11344,92 +11435,22 @@ function onCanvasKeyDown( event ) {
     this.raiseEvent('canvas-key', canvasKeyDownEventArgs);
 
     if ( !canvasKeyDownEventArgs.preventDefaultAction && !event.ctrl && !event.alt && !event.meta ) {
+
+        const code = event.originalEvent.code;
+        const shift = event.shift;
+        const action = getActiveActionFromKey(code, shift);
+
+        if (action && !this._activeActions[action]) {
+            this._activeActions[action] = true; // Mark this action as held down in the viewer's internal tracking object
+            this._navActionFrames[action] = 0; // Reset action frames
+            event.preventDefault = true; // prevent browser scroll/zoom, etc
+            return;
+        }
+
         switch( event.keyCode ){
-            case 38://up arrow/shift uparrow
-                if (!canvasKeyDownEventArgs.preventVerticalPan) {
-                  if ( event.shift ) {
-                    this.viewport.zoomBy(1.1);
-                  } else {
-                    this.viewport.panBy(this.viewport.deltaPointsFromPixels(new $.Point(0, -this.pixelsPerArrowPress)));
-                  }
-                  this.viewport.applyConstraints();
-                }
-                event.preventDefault = true;
-                break;
-            case 40://down arrow/shift downarrow
-                if (!canvasKeyDownEventArgs.preventVerticalPan) {
-                  if ( event.shift ) {
-                    this.viewport.zoomBy(0.9);
-                  } else {
-                    this.viewport.panBy(this.viewport.deltaPointsFromPixels(new $.Point(0, this.pixelsPerArrowPress)));
-                  }
-                  this.viewport.applyConstraints();
-                }
-                event.preventDefault = true;
-                break;
-            case 37://left arrow
-                if (!canvasKeyDownEventArgs.preventHorizontalPan) {
-                  this.viewport.panBy(this.viewport.deltaPointsFromPixels(new $.Point(-this.pixelsPerArrowPress, 0)));
-                  this.viewport.applyConstraints();
-                }
-                event.preventDefault = true;
-                break;
-            case 39://right arrow
-                if (!canvasKeyDownEventArgs.preventHorizontalPan) {
-                  this.viewport.panBy(this.viewport.deltaPointsFromPixels(new $.Point(this.pixelsPerArrowPress, 0)));
-                  this.viewport.applyConstraints();
-                }
-                event.preventDefault = true;
-                break;
-            case 187://=|+
-                this.viewport.zoomBy(1.1);
-                this.viewport.applyConstraints();
-                event.preventDefault = true;
-                break;
-            case 189://-|_
-                this.viewport.zoomBy(0.9);
-                this.viewport.applyConstraints();
-                event.preventDefault = true;
-                break;
             case 48://0|)
                 this.viewport.goHome();
                 this.viewport.applyConstraints();
-                event.preventDefault = true;
-                break;
-            case 87://W/w
-                if (!canvasKeyDownEventArgs.preventVerticalPan) {
-                    if ( event.shift ) {
-                        this.viewport.zoomBy(1.1);
-                    } else {
-                        this.viewport.panBy(this.viewport.deltaPointsFromPixels(new $.Point(0, -40)));
-                    }
-                    this.viewport.applyConstraints();
-                }
-                event.preventDefault = true;
-                break;
-            case 83://S/s
-                if (!canvasKeyDownEventArgs.preventVerticalPan) {
-                    if ( event.shift ) {
-                        this.viewport.zoomBy(0.9);
-                    } else {
-                        this.viewport.panBy(this.viewport.deltaPointsFromPixels(new $.Point(0, 40)));
-                    }
-                    this.viewport.applyConstraints();
-                }
-                event.preventDefault = true;
-                break;
-            case 65://a/A
-                if (!canvasKeyDownEventArgs.preventHorizontalPan) {
-                    this.viewport.panBy(this.viewport.deltaPointsFromPixels(new $.Point(-40, 0)));
-                    this.viewport.applyConstraints();
-                }
-                event.preventDefault = true;
-                break;
-            case 68://d/D
-                if (!canvasKeyDownEventArgs.preventHorizontalPan) {
-                    this.viewport.panBy(this.viewport.deltaPointsFromPixels(new $.Point(40, 0)));
-                    this.viewport.applyConstraints();
-                }
                 event.preventDefault = true;
                 break;
             case 82: //r - clockwise rotation/R - counterclockwise rotation
@@ -12025,6 +12046,15 @@ function onCanvasFocus( event ) {
 }
 
 function onCanvasBlur( event ) {
+
+    // When canvas loses focus, clear all navigation key states.
+    for (let action in this._activeActions) {
+        this._activeActions[action] = false;
+    }
+    for (let action in this._navActionVirtuallyHeld) {
+        this._navActionVirtuallyHeld[action] = false;
+    }
+
     /**
      * Raised when the {@link OpenSeadragon.Viewer#canvas} element loses keyboard focus.
      *
@@ -12212,7 +12242,70 @@ function doViewerResize(viewer, containerSize){
     THIS[viewer.hash].needsResize = false;
     THIS[viewer.hash].forceResize = false;
 }
+
+function handleNavKeys(viewer) {
+    // Iterate over all navigation actions.
+    for (let action in viewer._activeActions) {
+        if (viewer._activeActions[action] || viewer._navActionVirtuallyHeld[action]) {
+            viewer._navActionFrames[action]++;
+            if (viewer._navActionFrames[action] >= viewer._minNavActionFrames) {
+                viewer._navActionVirtuallyHeld[action] = false;
+            }
+        }
+    }
+
+    // Helper for action state
+    function isDown(action) {
+        return viewer._activeActions[action] || viewer._navActionVirtuallyHeld[action];
+    }
+
+    // Use the viewer's configured pan amount
+    const pixels = viewer.pixelsPerArrowPress / 10;
+    const panDelta = viewer.viewport.deltaPointsFromPixels(new OpenSeadragon.Point(pixels, pixels));
+
+    // 1. Zoom actions (priority: zoom disables pan)
+    if (isDown('zoomIn')) {
+        viewer.viewport.zoomBy(1.01, null, true);
+        viewer.viewport.applyConstraints();
+        return;
+    }
+    if (isDown('zoomOut')) {
+        viewer.viewport.zoomBy(0.99, null, true);
+        viewer.viewport.applyConstraints();
+        return;
+    }
+
+    // 2. Pan actions
+    let dx = 0;
+    let dy = 0;
+
+    if (!viewer.preventVerticalPan) {
+        if (isDown('panUp')) {
+            dy -= panDelta.y;
+        }
+        if (isDown('panDown')) {
+            dy += panDelta.y;
+        }
+    }
+
+    if (!viewer.preventHorizontalPan) {
+        if (isDown('panLeft')) {
+            dx -= panDelta.x;
+        }
+        if (isDown('panRight')) {
+            dx += panDelta.x;
+        }
+    }
+
+    if (dx !== 0 || dy !== 0) {
+        viewer.viewport.panBy(new OpenSeadragon.Point(dx, dy), true);
+        viewer.viewport.applyConstraints();
+    }
+}
+
 function updateOnce( viewer ) {
+
+    handleNavKeys(viewer);
 
     //viewer.profiler.beginUpdate();
 
@@ -14257,11 +14350,11 @@ $.TileSource.prototype = {
     tileExists: function( level, x, y ) {
         var numTiles = this.getNumTiles( level );
         return level >= this.minLevel &&
-               level <= this.maxLevel &&
-               x >= 0 &&
-               y >= 0 &&
-               x < numTiles.x &&
-               y < numTiles.y;
+            level <= this.maxLevel &&
+            x >= 0 &&
+            y >= 0 &&
+            x < numTiles.x &&
+            y < numTiles.y;
     },
 
     /**
@@ -14305,32 +14398,10 @@ $.TileSource.prototype = {
      * @param {string} [context.errorMsg] Private parameter. The final error message, default null (set by finish).
      */
     downloadTileStart: function (context) {
-        const dataStore = context.userData,
-            image = new Image();
-
-        dataStore.image = image;
-        dataStore.request = null;
-
-        const finalize = function(error) {
-            if (error || !image) {
-                context.fail(error || "[downloadTileStart] Image load failed: undefined Image instance.",
-                    dataStore.request);
-                return;
-            }
-            image.onload = image.onerror = image.onabort = null;
-            context.finish(image, dataStore.request, "image");
-        };
-        image.onload = function () {
-            finalize();
-        };
-        image.onabort = image.onerror = function() {
-            finalize("[downloadTileStart] Image load aborted.");
-        };
-
         // Load the tile with an AJAX request if the loadWithAjax option is
         // set. Otherwise load the image by setting the source property of the image object.
         if (context.loadWithAjax) {
-            dataStore.request = $.makeAjaxRequest({
+            $.makeAjaxRequest({
                 url: context.src,
                 withCredentials: context.ajaxWithCredentials,
                 headers: context.ajaxHeaders,
@@ -14358,22 +14429,17 @@ $.TileSource.prototype = {
                     }
                     // If the blob is empty for some reason consider the image load a failure.
                     if (blb.size === 0) {
-                        finalize("[downloadTileStart] Empty image response.");
+                        context.fail("[downloadTileStart] Empty image response.", request);
                     } else {
-                        // Create a URL for the blob data and make it the source of the image object.
-                        // This will still trigger Image.onload to indicate a successful tile load.
-                        image.src = (window.URL || window.webkitURL).createObjectURL(blb);
+                        context.finish(blb, request, "rasterBlob");
                     }
                 },
                 error: function(request) {
-                    finalize("[downloadTileStart] Image load aborted - XHR error");
+                    context.fail("[downloadTileStart] Image load aborted - XHR error", request);
                 }
             });
         } else {
-            if (context.crossOriginPolicy !== false) {
-                image.crossOrigin = context.crossOriginPolicy;
-            }
-            image.src = context.src;
+            context.finish(context.src, null, "imageUrl");
         }
     },
 
@@ -14500,17 +14566,17 @@ function processResponse( xhr ){
 
     if( responseText.match(/^\s*<.*/) ){
         try{
-        data = ( xhr.responseXML && xhr.responseXML.documentElement ) ?
-            xhr.responseXML :
-            $.parseXml( responseText );
+            data = ( xhr.responseXML && xhr.responseXML.documentElement ) ?
+                xhr.responseXML :
+                $.parseXml( responseText );
         } catch (e){
             data = xhr.responseText;
         }
     }else if( responseText.match(/\s*[{[].*/) ){
         try{
-          data = $.parseJSON(responseText);
+            data = $.parseJSON(responseText);
         } catch(e){
-          data =  responseText;
+            data =  responseText;
         }
     }else{
         data = responseText;
@@ -17341,7 +17407,7 @@ $.PriorityQueue.Node = class {
 }(OpenSeadragon));
 
 /*
- * OpenSeadragon.convertor (static property)
+ * OpenSeadragon.converter (static property)
  *
  * Copyright (C) 2009 CodePlex Foundation
  * Copyright (C) 2010-2025 OpenSeadragon contributors
@@ -17493,7 +17559,7 @@ class WeightedGraph {
  * Edge.transform function on the conversion path in OpenSeadragon.converter.getConversionPath().
  *  It can be also conversion to undefined if used as destructor implementation.
  *
- * @callback TypeConvertor
+ * @callback TypeConverter
  * @memberof OpenSeadragon
  * @param {OpenSeadragon.Tile} tile reference tile that owns the data
  * @param {any} data data in the input format
@@ -17520,16 +17586,37 @@ class WeightedGraph {
  * @param {OpenSeadragon.PriorityQueue.Node} origin - Origin node of the conversion step.
  *  Its value is the origin format.
  * @param {number} weight cost of the conversion
- * @param {TypeConvertor} transform the conversion itself
+ * @param {TypeConverter} transform the conversion itself
  */
 
 /**
  * Class that orchestrates automated data types conversion. Do not instantiate
- * this class, use OpenSeadragon.convertor - a global instance, instead.
- * @class DataTypeConvertor
+ * this class, use OpenSeadragon.converter - a global instance, instead.
+ *
+ * Types are defined to closely describe the data type, e.g. "url" is insufficient,
+ * because url can point to many different data types. Another bad example is 'canvas'
+ * as canvas can have different underlying rendering implementations and thus differ
+ * in behavior. The following data types supported by
+ * OpenSeadragon core are:
+ * - "image" - HTMLImageElement, an <image> object
+ * - "context2d" - HtmlRenderingContext2D, a 2D canvas context
+ * - "imageUrl" - string, a URL to a resource carrying image data
+ * - "rasterBlob" - Blob, a binary file-like object carrying image data
+ *
+ * The system uses these to deliver desired data from TileSource (which implements fetching logics)
+ * through plugins to the renderer with preserving data type compatibility. Typical example is:
+ *  TiledImage downloads without ajax a data present at url 'myUrl'. It submits
+ *  to the system object of data type 'imageUrl'. The system runs this object through
+ *  possible plugins integrated into the invalidation routine (by default none),
+ *  and finishes by conversion for the WebGL renderer, which would most likely be "image"
+ *  object, because the conversion is the cheapest starting from "imageUrl" type.
+ *  If some plugin required context2d type, the pipeline would deliver this type and used
+ *  it also for WebGL, as texture loading function accepts canvas object as well as image.
+ *
+ * @class DataTypeConverter
  * @memberOf OpenSeadragon
  */
-$.DataTypeConvertor = class {
+$.DataTypeConverter = class {
 
     constructor() {
         this.graph = new WeightedGraph();
@@ -17544,10 +17631,13 @@ $.DataTypeConvertor = class {
             const img = new Image();
             img.onerror = img.onabort = reject;
             img.onload = () => resolve(img);
+            if (tile.tiledImage && tile.tiledImage.crossOriginPolicy) {
+                img.crossOrigin = tile.tiledImage.crossOriginPolicy;
+            }
             img.src = url;
         });
         const canvasContextCreator = (tile, imageData) => {
-            const canvas = document.createElement( 'canvas' );
+            const canvas = document.createElement('canvas');
             canvas.width = imageData.width;
             canvas.height = imageData.height;
             const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -17555,15 +17645,38 @@ $.DataTypeConvertor = class {
             return context;
         };
 
-        this.learn("context2d", "webImageUrl", (tile, ctx) => ctx.canvas.toDataURL(), 1, 2);
-        this.learn("image", "webImageUrl", (tile, image) => image.url);
+        this.learn("rasterBlob", "image", (tile, blob) => new $.Promise((resolve, reject) => {
+            // eslint-disable-next-line compat/compat
+            const url = (window.URL || window.webkitURL).createObjectURL(blob);
+            if (!$.supportsAsync) {
+                reject("Not supported in sync mode!");
+            }
+            const img = new Image();
+            img.onerror = img.onabort = reject;
+            img.onload = () => {
+                // eslint-disable-next-line compat/compat
+                (window.URL || window.webkitURL).revokeObjectURL(blob);
+                resolve(img);
+            };
+            img.src = url;
+        }));
+        this.learn("context2d", "rasterBlob", (tile, ctx) => new $.Promise((resolve, reject) => {
+            if (!$.supportsAsync) {
+                reject("Not supported in sync mode!");
+            }
+            ctx.canvas.toBlob(resolve);
+        }));
+
+        this.learn("context2d", "imageUrl", (tile, ctx) => ctx.canvas.toDataURL(), 1, 2);
+        this.learn("image", "imageUrl", (tile, image) => image.url);
         this.learn("image", "context2d", canvasContextCreator, 1, 1);
-        this.learn("url", "image", imageCreator, 1, 1);
+        this.learn("imageUrl", "image", imageCreator, 1, 1);
 
         //Copies
         this.learn("image", "image", (tile, image) => imageCreator(tile, image.src), 1, 1);
-        this.learn("url", "url", (tile, url) => url, 0, 1); //strings are immutable, no need to copy
+        this.learn("imageUrl", "imageUrl", (tile, url) => url, 0, 1); //strings are immutable, no need to copy
         this.learn("context2d", "context2d", (tile, ctx) => canvasContextCreator(tile, ctx.canvas));
+        this.learn("rasterBlob", "rasterBlob", (tile, blob) => blob, 0, 1); //blobs are immutable, no need to copy
 
         /**
          * Free up canvas memory
@@ -17629,7 +17742,7 @@ $.DataTypeConvertor = class {
      * Teach the system to convert data type 'from' -> 'to'
      * @param {string} from unique ID of the data item 'from'
      * @param {string} to unique ID of the data item 'to'
-     * @param {OpenSeadragon.TypeConvertor} callback convertor that takes two arguments: a tile reference, and
+     * @param {OpenSeadragon.TypeConverter} callback converter that takes two arguments: a tile reference, and
      *  a data object of a type 'from'; and converts this data object to type 'to'. It can return also the value
      *  wrapped in a Promise (returned in resolve) or it can be async function.
      * @param {Number} [costPower=0] positive cost class of the conversion, smaller or equal than 7.
@@ -17643,8 +17756,8 @@ $.DataTypeConvertor = class {
      *   use costPower=2, costMultiplier=3; can be between 1 and 10^5
      */
     learn(from, to, callback, costPower = 0, costMultiplier = 1) {
-        $.console.assert(costPower >= 0 && costPower <= 7, "[DataTypeConvertor] Conversion costPower must be between <0, 7>.");
-        $.console.assert($.isFunction(callback), "[DataTypeConvertor:learn] Callback must be a valid function!");
+        $.console.assert(costPower >= 0 && costPower <= 7, "[DataTypeConverter] Conversion costPower must be between <0, 7>.");
+        $.console.assert($.isFunction(callback), "[DataTypeConverter:learn] Callback must be a valid function!");
 
         if (from === to) {
             this.copyings[to] = callback;
@@ -17687,7 +17800,7 @@ $.DataTypeConvertor = class {
     convert(tile, data, from, ...to) {
         const conversionPath = this.getConversionPath(from, to);
         if (!conversionPath) {
-            $.console.error(`[OpenSeadragon.convertor.convert] Conversion ${from} ---> ${to} cannot be done!`);
+            $.console.error(`[OpenSeadragon.converter.convert] Conversion ${from} ---> ${to} cannot be done!`);
             return $.Promise.resolve();
         }
 
@@ -17700,7 +17813,7 @@ $.DataTypeConvertor = class {
             let edge = conversionPath[i];
             let y = edge.transform(tile, x);
             if (y === undefined) {
-                $.console.error(`[OpenSeadragon.convertor.convert] data mid result undefined value (while converting using %s)`, edge);
+                $.console.error(`[OpenSeadragon.converter.convert] data mid result undefined value (while converting using %s)`, edge);
                 return $.Promise.resolve();
             }
             //node.value holds the type string
@@ -17727,7 +17840,7 @@ $.DataTypeConvertor = class {
             const y = copyTransform(tile, data);
             return $.type(y) === "promise" ? y : $.Promise.resolve(y);
         }
-        $.console.warn(`[OpenSeadragon.convertor.copy] is not supported with type %s`, type);
+        $.console.warn(`[OpenSeadragon.converter.copy] is not supported with type %s`, type);
         return $.Promise.resolve(undefined);
     }
 
@@ -17754,13 +17867,13 @@ $.DataTypeConvertor = class {
      * @return {ConversionStep[]|undefined} array of required conversions (returns empty array
      *  for from===to), or undefined if the system cannot convert between given types.
      *  Each object has 'transform' function that converts between neighbouring types, such
-     *  that x = arr[i].transform(x) is valid input for convertor arr[i+1].transform(), e.g.
+     *  that x = arr[i].transform(x) is valid input for converter arr[i+1].transform(), e.g.
      *  arr[i+1].transform(arr[i].transform( ... )) is a valid conversion procedure.
      *
      *  Note: if a function is returned, it is a callback called once the data is ready.
      */
     getConversionPath(from, to) {
-        let bestConvertorPath, selectedType;
+        let bestConverterPath, selectedType;
         let knownFrom = this._known[from];
         if (!knownFrom) {
             this._known[from] = knownFrom = {};
@@ -17775,24 +17888,27 @@ $.DataTypeConvertor = class {
             selectedType = to[0];
 
             for (const outType of to) {
-                const conversion = knownFrom[outType];
+                let conversion = knownFrom[outType];
+                if (conversion === undefined) {
+                    knownFrom[outType] = conversion = this.graph.dijkstra(from, outType);
+                }
                 if (conversion && bestCost > conversion.cost) {
-                    bestConvertorPath = conversion;
+                    bestConverterPath = conversion;
                     bestCost = conversion.cost;
                     selectedType = outType;
                 }
             }
         } else {
             $.console.assert(typeof to === "string", "[getConversionPath] conversion 'to' type must be defined.");
-            bestConvertorPath = knownFrom[to];
+            bestConverterPath = knownFrom[to];
             selectedType = to;
+            if (bestConverterPath === undefined) {
+                bestConverterPath = this.graph.dijkstra(from, selectedType);
+                this._known[from][selectedType] = bestConverterPath;
+            }
         }
 
-        if (!bestConvertorPath) {
-            bestConvertorPath = this.graph.dijkstra(from, selectedType);
-            this._known[from][selectedType] = bestConvertorPath;
-        }
-        return bestConvertorPath ? bestConvertorPath.path : undefined;
+        return bestConverterPath ? bestConverterPath.path : undefined;
     }
 
     /**
@@ -17804,7 +17920,7 @@ $.DataTypeConvertor = class {
     }
 
     /**
-     * Check whether given type is known to the convertor
+     * Check whether given type is known to the converter
      * @param {string} type type to test
      * @return {boolean}
      */
@@ -17814,7 +17930,7 @@ $.DataTypeConvertor = class {
 };
 
 /**
- * Static convertor available throughout OpenSeadragon.
+ * Static converter available throughout OpenSeadragon.
  *
  * Built-in conversions include types:
  *  - context2d    canvas 2d context
@@ -17822,10 +17938,10 @@ $.DataTypeConvertor = class {
  *  - url    url string carrying or pointing to 2D raster data
  *  - canvas       HTMLCanvas element
  *
- * @type OpenSeadragon.DataTypeConvertor
+ * @type OpenSeadragon.DataTypeConverter
  * @memberOf OpenSeadragon
  */
-$.convertor = new $.DataTypeConvertor();
+$.converter = new $.DataTypeConverter();
 
 }(OpenSeadragon));
 
@@ -20430,7 +20546,7 @@ $.Tile = function(level, x, y, bounds, exists, url, context2D, loadWithAjax, aja
     this.positionedBounds  = new OpenSeadragon.Rect(bounds.x, bounds.y, bounds.width, bounds.height);
     /**
      * The portion of the tile to use as the source of the drawing operation, in pixels. Note that
-     * this property is ignored with HTML drawer.
+     * this property is ignored with HTML drawer where the whole tile is always drawn.
      * @member {OpenSeadragon.Rect} sourceBounds
      * @memberof OpenSeadragon.Tile#
      */
@@ -20896,16 +21012,16 @@ $.Tile.prototype = {
             if (typeof data === 'function') {
                 $.console.error("[TileCache.cacheTile] options.data as a callback requires type argument! Current is " + type);
             }
-            type = $.convertor.guessType(data);
+            type = $.converter.guessType(data);
         }
 
         const overwritesMainCache = key === this.cacheKey;
         if (_safely && (overwritesMainCache || setAsMain)) {
             // Need to get the supported type for rendering out of the active drawer.
             const supportedTypes = tiledImage.viewer.drawer.getSupportedDataFormats();
-            const conversion = $.convertor.getConversionPath(type, supportedTypes);
+            const conversion = $.converter.getConversionPath(type, supportedTypes);
             $.console.assert(conversion, "[Tile.addCache] data was set for the default tile cache we are unable" +
-                `to render. Make sure OpenSeadragon.convertor was taught to convert ${type} to (one of): ${conversion.toString()}`);
+                `to render. Make sure OpenSeadragon.converter was taught to convert ${type} to (one of): ${conversion.toString()}`);
         }
 
         const cachedItem = tiledImage._tileCache.cacheTile({
@@ -20954,9 +21070,9 @@ $.Tile.prototype = {
             if (overwritesMainCache || setAsMain) {
                 // Need to get the supported type for rendering out of the active drawer.
                 const supportedTypes = tiledImage.viewer.drawer.getSupportedDataFormats();
-                const conversion = $.convertor.getConversionPath(cache.type, supportedTypes);
+                const conversion = $.converter.getConversionPath(cache.type, supportedTypes);
                 $.console.assert(conversion, "[Tile.setCache] data was set for the default tile cache we are unable" +
-                    `to render. Make sure OpenSeadragon.convertor was taught to convert ${cache.type} to (one of): ${conversion.toString()}`);
+                    `to render. Make sure OpenSeadragon.converter was taught to convert ${cache.type} to (one of): ${conversion.toString()}`);
             }
         }
 
@@ -21770,15 +21886,6 @@ OpenSeadragon.DrawerBase = class DrawerBase{
     }
 
     /**
-     * When a Tiled Image is initialized and ready, this method is called.
-     * Unlike with events, here it is guaranteed that all external code has finished
-     * processing (under normal circumstances) and the tiled image should not change.
-     */
-    tiledImageCreated() {
-        // pass
-    }
-
-    /**
      * Get unique drawer ID
      * @return {string}
      */
@@ -21939,6 +22046,15 @@ OpenSeadragon.DrawerBase = class DrawerBase{
      */
     setInternalCacheNeedsRefresh() {
         this._dataNeedsRefresh = $.now();
+    }
+
+    /**
+     * When a Tiled Image is initialized and ready, this method is called.
+     * Unlike with events, here it is guaranteed that all external code has finished
+     * processing (under normal circumstances) and the tiled image should not change.
+     */
+    tiledImageCreated() {
+        // pass
     }
 
     // Private functions
@@ -22171,11 +22287,11 @@ class HTMLDrawer extends OpenSeadragon.DrawerBase{
         }
 
         // The actual placing logics will not happen at draw event, but when the cache is created:
-        $.convertor.learn("context2d", HTMLDrawer.canvasCacheType, (t, d) => _prepareTile(t, d.canvas), 1, 1);
-        $.convertor.learn("image", HTMLDrawer.imageCacheType, _prepareTile, 1, 1);
+        $.converter.learn("context2d", HTMLDrawer.canvasCacheType, (t, d) => _prepareTile(t, d.canvas), 1, 1);
+        $.converter.learn("image", HTMLDrawer.imageCacheType, _prepareTile, 1, 1);
         // Also learn how to move back, since these elements can be just used as-is
-        $.convertor.learn(HTMLDrawer.canvasCacheType, "context2d", (t, d) => d.data.getContext('2d'), 1, 3);
-        $.convertor.learn(HTMLDrawer.imageCacheType, "image", (t, d) => d.data, 1, 3);
+        $.converter.learn(HTMLDrawer.canvasCacheType, "context2d", (t, d) => d.data.getContext('2d'), 1, 3);
+        $.converter.learn(HTMLDrawer.imageCacheType, "image", (t, d) => d.data, 1, 3);
 
         function _freeTile(data) {
             if ( data.imgElement && data.imgElement.parentNode ) {
@@ -22186,8 +22302,8 @@ class HTMLDrawer extends OpenSeadragon.DrawerBase{
             }
         }
 
-        $.convertor.learnDestroy(HTMLDrawer.canvasCacheType, _freeTile);
-        $.convertor.learnDestroy(HTMLDrawer.imageCacheType, _freeTile);
+        $.converter.learnDestroy(HTMLDrawer.canvasCacheType, _freeTile);
+        $.converter.learnDestroy(HTMLDrawer.imageCacheType, _freeTile);
     }
 
     static get imageCacheType() {
@@ -23811,9 +23927,12 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
 
                         if (textureInfo && textureInfo.texture) {
                             this._getTileData(tile, tiledImage, textureInfo, overallMatrix, indexInDrawArray, texturePositionArray, textureDataArray, matrixArray, opacityArray);
-                        } else {
-                            // console.log('No tile info', tile);
                         }
+                        // else {
+                        //   If the texture info is not available, we cannot draw this tile. This is either because
+                        //   the tile data is still being processed, or the data was not correct - in that case,
+                        //   internalCacheCreate(..) already logged an error.
+                        // }
 
                         if( (numTilesToDraw === maxTextures) || (tileIndex === tilesToDraw.length - 1)){
                             // We've filled up the buffers: time to draw this set of tiles
@@ -23934,11 +24053,6 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             context.restore();
         }
 
-        // private
-        _getTextureDataFromTile(tile){
-            return tile.getCanvasContext().canvas;
-        }
-
         /**
         * Draw data from the rendering canvas onto the output canvas, with clipping,
         * cropping and/or debug info as requested.
@@ -23979,45 +24093,43 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
 
             let texture = textureInfo.texture;
             let textureQuad = textureInfo.position;
+            let overlapFraction = textureInfo.overlapFraction;
 
             // set the position of this texture
             texturePositionArray.set(textureQuad, index * 12);
 
             // compute offsets that account for tile overlap; needed for calculating the transform matrix appropriately
-            let overlapFraction = this._calculateOverlapFraction(tile, tiledImage);
             let xOffset = tile.positionedBounds.width * overlapFraction.x;
             let yOffset = tile.positionedBounds.height * overlapFraction.y;
-
-            // x, y, w, h in viewport coords
             let x = tile.positionedBounds.x + (tile.x === 0 ? 0 : xOffset);
             let y = tile.positionedBounds.y + (tile.y === 0 ? 0 : yOffset);
             let right = tile.positionedBounds.x + tile.positionedBounds.width - (tile.isRightMost ? 0 : xOffset);
             let bottom = tile.positionedBounds.y + tile.positionedBounds.height - (tile.isBottomMost ? 0 : yOffset);
-            let w = right - x;
-            let h = bottom - y;
 
-            let matrix = new $.Mat3([
-                w, 0, 0,
-                0, h, 0,
-                x, y, 1,
+            const model = new $.Mat3([
+                right - x, 0, 0, // right - x = width
+                0, bottom - y, 0, // bottom - y = height
+                x, y, 1
             ]);
 
-            if(tile.flipped){
-                // flip the tile around the center of the unit quad
-                let t1 = $.Mat3.makeTranslation(0.5, 0);
-                let t2 = $.Mat3.makeTranslation(-0.5, 0);
+            if (tile.flipped) {
+                // For documentation:
+                // // flip the tile around the center of the unit quad
+                // let t1 = $.Mat3.makeTranslation(0.5, 0);
+                // let t2 = $.Mat3.makeTranslation(-0.5, 0);
+                //
+                // // update the view matrix to account for this image's rotation
+                // let localMatrix = t1.multiply($.Mat3.makeScaling(-1, 1)).multiply(t2);
+                // matrix = matrix.multiply(localMatrix);
 
-                // update the view matrix to account for this image's rotation
-                let localMatrix = t1.multiply($.Mat3.makeScaling(-1, 1)).multiply(t2);
-                matrix = matrix.multiply(localMatrix);
+                //Optimized: this works since matrix only contains main diagonal values & translation
+                model.scaleAndTranslateSelf(-1, 1, 1, 0);
             }
 
-            let overallMatrix = viewMatrix.multiply(matrix);
-
+            model.scaleAndTranslateOtherSetSelf(viewMatrix);
             opacityArray[index] = tile.opacity;
             textureDataArray[index] = texture;
-            matrixArray[index] = overallMatrix.values;
-
+            matrixArray[index] = model.values;
         }
 
         // private
@@ -24164,12 +24276,11 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             attribute vec2 a_output_position;
             attribute vec2 a_texture_position;
 
-            uniform mat3 u_matrix;
-
             varying vec2 v_texture_position;
 
             void main() {
-                gl_Position = vec4(u_matrix * vec3(a_output_position, 1), 1);
+                // Transform to clip space (0:1 --> -1:1)
+                gl_Position = vec4(vec3(a_output_position * 2.0 - 1.0, 1), 1);
 
                 v_texture_position = a_texture_position;
             }
@@ -24203,7 +24314,6 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                 shaderProgram: program,
                 aOutputPosition: gl.getAttribLocation(program, 'a_output_position'),
                 aTexturePosition: gl.getAttribLocation(program, 'a_texture_position'),
-                uMatrix: gl.getUniformLocation(program, 'u_matrix'),
                 uImage: gl.getUniformLocation(program, 'u_image'),
                 uOpacityMultiplier: gl.getUniformLocation(program, 'u_opacity_multiplier'),
                 bufferOutputPosition: gl.createBuffer(),
@@ -24220,10 +24330,6 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             gl.bindBuffer(gl.ARRAY_BUFFER, this._secondPass.bufferTexturePosition);
             gl.bufferData(gl.ARRAY_BUFFER, this._unitQuad, gl.DYNAMIC_DRAW); // bind data statically here since it's unchanging
             gl.enableVertexAttribArray(this._secondPass.aTexturePosition);
-
-            // set the matrix that transforms the framebuffer to clip space
-            let matrix = $.Mat3.makeScaling(2, 2).multiply($.Mat3.makeTranslation(-0.5, -0.5));
-            gl.uniformMatrix3fv(this._secondPass.uMatrix, false, matrix.values);
         }
 
         // private
@@ -24299,9 +24405,14 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
             let position;
 
             let data = cache.data;
+            let isCanvas = false;
+            if (data instanceof CanvasRenderingContext2D) {
+                data = data.canvas;
+                isCanvas = true;
+            }
 
             if (!tiledImage.isTainted()) {
-                if((data instanceof CanvasRenderingContext2D) && $.isCanvasTainted(data.canvas)){
+                if (isCanvas && $.isCanvasTainted(data)){
                     tiledImage.setTainted(true);
                     $.console.warn('WebGL cannot be used to draw this TiledImage because it has tainted data. Does crossOriginPolicy need to be set?');
                     this._raiseDrawerErrorEvent(tiledImage, 'Tainted data cannot be used by the WebGLDrawer. Falling back to CanvasDrawer for this TiledImage.');
@@ -24319,11 +24430,10 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                     // create a gl Texture for this tile and bind the canvas with the image data
                     texture = gl.createTexture();
                     let overlap = tiledImage.source.tileOverlap;
+                    let overlapFraction = this._calculateOverlapFraction(tile, tiledImage);
                     if( overlap > 0){
                         // calculate the normalized position of the rect to actually draw
                         // discarding overlap.
-                        let overlapFraction = this._calculateOverlapFraction(tile, tiledImage);
-
                         let left = (tile.x === 0 ? 0 : overlapFraction.x) * sourceWidthFraction;
                         let top = (tile.y === 0 ? 0 : overlapFraction.y) * sourceHeightFraction;
                         let right = (tile.isRightMost ? 1 : 1 - overlapFraction.x) * sourceWidthFraction;
@@ -24352,6 +24462,7 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                         return {
                             texture: texture,
                             position: position,
+                            overlapFraction: overlapFraction
                         };
                     } catch (e){
                         // Todo a bit dirty re-use of the tainted flag, but makes the code more stable
@@ -24409,14 +24520,6 @@ function determineSubPixelRoundingRule(subPixelRoundingRules) {
                 y: heightOverlapFraction
             };
         }
-
-        // private
-//         _unloadTextures(){
-//             let canvases = Array.from(this._TextureMap.keys());
-//             canvases.forEach(canvas => {
-//                 this._cleanupImageData(canvas); // deletes texture, removes from _TextureMap
-//             });
-//         }
 
         _setClip(){
             // no-op: called by _renderToClippingCanvas when tiledImage._clip is truthy
@@ -28065,11 +28168,14 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
         // Load the new 'best' n tiles
         if (bestTiles && bestTiles.length > 0) {
-            for (let tile of bestTiles) {
-                if (tile) {
-                    this._loadTile(tile, currentTime);
+            // Avoid executing this in the frame loop
+            setTimeout(() => {
+                for (let tile of bestTiles) {
+                    if (tile) {
+                        this._loadTile(tile, currentTime);
+                    }
                 }
-            }
+            });
             this._needsDraw = true;
             return false;
         } else {
@@ -28364,7 +28470,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
         });
 
-        return best;
+        return best || [];
     },
 
     /**
@@ -28789,6 +28895,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         tile.tiledImage = this; //unloaded with tile.unload(), so we need to set it back
         // does nothing if tile.cacheKey already present
 
+        $.console.assert(dataType !== undefined, "TileSource::downloadTileStart must return a dataType.");
+
         let tileCacheCreated = false;
         tile.addCache(tile.cacheKey, () => {
             tileCacheCreated = true;
@@ -29136,7 +29244,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
         /**
          * Read the cache type. The type can dynamically change, but should be consistent at
-         * one point in the time. For available types see the OpenSeadragon.Convertor, or the tutorials.
+         * one point in the time. For available types see the OpenSeadragon.Converter, or the tutorials.
          * @returns {string}
          */
         get type() {
@@ -29200,7 +29308,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         getDataAs(type = undefined, copy = true) {
             if (this.loaded) {
                 if (type === this._type) {
-                    return copy ? $.convertor.copy(this._tRef, this._data, type || this._type) : this._promise;
+                    return copy ? $.converter.copy(this._tRef, this._data, type || this._type) : this._promise;
                 }
                 return this._transformDataIfNeeded(this._tRef, this._data, type || this._type, copy) || this._promise;
             }
@@ -29215,14 +29323,14 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
             let result;
             if (type !== this._type) {
-                result = $.convertor.convert(referenceTile, data, this._type, type);
+                result = $.converter.convert(referenceTile, data, this._type, type);
             } else if (copy) { //convert does not copy data if same type, do explicitly
-                result = $.convertor.copy(referenceTile, data, type);
+                result = $.converter.copy(referenceTile, data, type);
             }
             if (result) {
                 return result.then(finalData => {
                     if (this._destroyed) {
-                        $.convertor.destroy(finalData, type);
+                        $.converter.destroy(finalData, type);
                         return undefined;
                     }
                     return finalData;
@@ -29535,7 +29643,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                     this._destroySelfUnsafe(this._data, this._type);
                 } else if (this._promise) {
                     const oldType = this._type;
-                    this._promise.then(x => this._destroySelfUnsafe(x, oldType));
+                    this._promise.then(x => this._destroySelfUnsafe(x, oldType)).catch($.console.error);
                 }
             }
 
@@ -29543,7 +29651,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
         _destroySelfUnsafe(data, type) {
             // ensure old data destroyed
-            $.convertor.destroy(data, type);
+            $.converter.destroy(data, type);
             this.destroyInternalCache();
             // might've got revived in meanwhile if async ...
             if (!this._destroyed) {
@@ -29683,7 +29791,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         _overwriteData(data, type) {
             if (this._destroyed) {
                 //we have received the ownership of the data, destroy it too since we are destroyed
-                $.convertor.destroy(data, type);
+                $.converter.destroy(data, type);
                 return $.Promise.resolve();
             }
             if (this.loaded) {
@@ -29691,7 +29799,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                 if (this._data === data && this._type === type) {
                     return this._promise;
                 }
-                $.convertor.destroy(this._data, this._type);
+                $.converter.destroy(this._data, this._type);
                 this._type = type;
                 this._data = data;
                 this._promise = $.Promise.resolve(data);
@@ -29709,7 +29817,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                 if (this._data === data && this._type === type) {
                     return this._data;
                 }
-                $.convertor.destroy(this._data, this._type);
+                $.converter.destroy(this._data, this._type);
                 this._type = type;
                 this._data = data;
                 this._promise = $.Promise.resolve(data);
@@ -29731,8 +29839,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
          * @private
          */
         _convert(from, to) {
-            const convertor = $.convertor,
-                conversionPath = convertor.getConversionPath(from, to);
+            const converter = $.converter,
+                conversionPath = converter.getConversionPath(from, to);
             if (!conversionPath) {
                 $.console.error(`[CacheRecord._convert] Conversion ${from} ---> ${to} cannot be done!`);
                 return; //no-op
@@ -29754,7 +29862,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                         _this.loaded = false;
                         throw `[CacheRecord._convert] data mid result undefined value (while converting using ${edge}})`;
                     }
-                    convertor.destroy(x, edge.origin.value);
+                    converter.destroy(x, edge.origin.value);
                     const result = $.type(y) === "promise" ? y : $.Promise.resolve(y);
                     return result.then(res => convert(res, i + 1));
                 };
@@ -29967,7 +30075,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                     $.console.error("[TileCache.cacheTile] options.dataType is mandatory " +
                         " when data item is a callback!");
                 }
-                options.dataType = $.convertor.guessType(options.data);
+                options.dataType = $.converter.guessType(options.data);
             }
 
             cacheRecord.addTile(theTile, options.data, options.dataType);
@@ -30802,7 +30910,7 @@ $.extend( $.World.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.W
             return eventTarget.raiseEventAwaiting('tile-invalidated', {
                 tile: tile,
                 tiledImage: tiledImage,
-                outdated: () => originalCache.__invStamp !== tStamp || (!tile.loaded && !tile.loading),
+                outdated: () => this.viewer.isDestroyed() || originalCache.__invStamp !== tStamp || (!tile.loaded && !tile.loading),
                 getData: getWorkingCacheData,
                 setData: setWorkingCacheData,
                 resetData: () => {
@@ -30812,6 +30920,10 @@ $.extend( $.World.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.W
                     }
                 }
             }).then(_ => {
+                if (this.viewer.isDestroyed()) {
+                    return null;
+                }
+
                 if (originalCache.__invStamp === tStamp && (tile.loaded || tile.loading)) {
                     if (workingCache) {
                         return workingCache.prepareForRendering(drawer).then(c => {
@@ -30854,7 +30966,10 @@ $.extend( $.World.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.W
             for (let resolve of tileFinishResolvers) {
                 resolve();
             }
-            this.draw();
+
+            if (!this.viewer.isDestroyed()) {
+                this.draw();
+            }
         });
     },
 
@@ -31071,3934 +31186,5 @@ $.extend( $.World.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.W
 });
 
 }( OpenSeadragon ));
-
-(function($) {
-    /**
-     * @typedef {Object} ShaderConfig
-     * @property {String} shaderConfig.id
-     * @property {String} shaderConfig.name
-     * @property {String} shaderConfig.type         equal to ShaderLayer.type(), e.g. "identity"
-     * @property {Number} shaderConfig.visible      1 = use for rendering, 0 = do not use for rendering
-     * @property {Boolean} shaderConfig.fixed
-     * @property {Object} shaderConfig.params          settings for the ShaderLayer
-     * @property {OpenSeadragon.TiledImage[]|number[]} tiledImages images that provide the data
-     * @property {Object} shaderConfig._controls       storage for the ShaderLayer's controls
-     * @property {Object} shaderConfig._cache          cache object used by the ShaderLayer's controls
-     */
-
-    /**
-     * @typedef {Object} FPRenderPackageItem
-     * @property {WebGLTexture[]} texture           [TEXTURE_2D]
-     * @property {Float32Array} textureCoords
-     * @property {Float32Array} transformMatrix
-     * //todo provide also opacity per tile?
-     */
-
-    /**
-     * @typedef {Object} FPRenderPackage
-     * @property {FPRenderPackageItem} tiles
-     * @property {Number[][]} stencilPolygons
-     */
-
-    /**
-     * @typedef {Object} SPRenderPackage
-     * @property {Number} zoom
-     * @property {Number} pixelsize
-     * @property {Number} opacity
-     * @property {ShaderLayer} shader
-     * @property {Uint8Array|undefined} iccLut  TODO also support error rendering by passing some icon texture & rendering where nothing was rendered but should be (-> use mask, but how we force tiles to come to render if they are failed?  )
-     */
-
-    /**
-     * @typedef {Object} FPOutput
-     * @typedef {Object} SPOutput
-     */
-
-    /**
-     * WebGL Renderer for OpenSeadragon.
-     *
-     * Renders in two passes:
-     *  1st pass joins tiles and creates masks where we should draw
-     *  2nd pass draws the actual data using shaders
-     *
-     * @property {RegExp} idPattern
-     * @property {Object} BLEND_MODE
-     *
-     * @class OpenSeadragon.WebGLModule
-     * @classdesc class that manages ShaderLayers, their controls, and WebGLContext to allow rendering using WebGL
-     * @memberof OpenSeadragon
-     */
-    $.WebGLModule = class extends $.EventSource {
-
-        /**
-         * @param {Object} incomingOptions
-         *
-         * @param {String} incomingOptions.uniqueId
-         *
-         * @param {String} incomingOptions.webGLPreferredVersion    prefered WebGL version, "1.0" or "2.0"
-         *
-         * @param {Function} incomingOptions.ready                  function called when WebGLModule is ready to render
-         * @param {Function} incomingOptions.redrawCallback          function called when user input changed; triggers re-render of the viewport
-         * @param {Function} incomingOptions.refetchCallback        function called when underlying data changed; triggers re-initialization of the whole WebGLDrawer
-         * @param {Boolean} incomingOptions.debug                   debug mode on/off
-         * @param {Boolean} incomingOptions.interactive             if true (default), the layers are configured for interactive changes (not applied by default)
-         *
-         * @param {Object} incomingOptions.canvasOptions
-         * @param {Boolean} incomingOptions.canvasOptions.alpha
-         * @param {Boolean} incomingOptions.canvasOptions.premultipliedAlpha
-         * @param {Boolean} incomingOptions.canvasOptions.stencil
-         *
-         * @constructor
-         * @memberof WebGLModule
-         */
-        constructor(incomingOptions) {
-            super();
-
-            if (!this.constructor.idPattern.test(incomingOptions.uniqueId)) {
-                throw new Error("$.WebGLModule::constructor: invalid ID! Id can contain only letters, numbers and underscore. ID: " + incomingOptions.uniqueId);
-            }
-            this.uniqueId = incomingOptions.uniqueId;
-
-            this.webGLPreferredVersion = incomingOptions.webGLPreferredVersion;
-
-
-            this.ready = incomingOptions.ready;
-            this.redrawCallback = incomingOptions.redrawCallback;
-            this.refetchCallback = incomingOptions.refetchCallback;
-            this.debug = incomingOptions.debug;
-            this.interactive = !!incomingOptions.interactive;
-
-            this.running = false;           // boolean; true if WebGLModule is ready to render
-            this._program = null;            // WebGLProgram
-            this._shaders = {};
-            this._shadersOrder = [];
-            this._programImplementations = {};
-
-            this.canvasContextOptions = incomingOptions.canvasOptions;
-            const canvas = document.createElement("canvas");
-            const WebGLImplementation = this.constructor.determineContext(this.webGLPreferredVersion);
-            const webGLRenderingContext = $.WebGLModule.WebGLImplementation.createWebglContext(canvas, this.webGLPreferredVersion, this.canvasContextOptions);
-            if (webGLRenderingContext) {
-                this.gl = webGLRenderingContext;                                            // WebGLRenderingContext|WebGL2RenderingContext
-                this.webglContext = new WebGLImplementation(this, webGLRenderingContext);   // $.WebGLModule.WebGLImplementation
-                this.canvas = canvas;
-
-                // Should be last call of the constructor to make sure everything is initialized
-                this.webglContext.init();
-            } else {
-                throw new Error("$.WebGLModule::constructor: Could not create WebGLRenderingContext!");
-            }
-        }
-
-        /**
-         * Search through all WebGLModule properties to find one that extends WebGLImplementation and it's getVersion() method returns <version> input parameter.
-         * @param {String} version WebGL version, "1.0" or "2.0"
-         * @returns {WebGLImplementation}
-         *
-         * @instance
-         * @memberof WebGLModule
-         */
-        static determineContext(version) {
-            const namespace = $.WebGLModule;
-            for (let property in namespace) {
-                const context = namespace[ property ],
-                    proto = context.prototype;
-                if (proto && proto instanceof namespace.WebGLImplementation &&
-                    $.isFunction( proto.getVersion ) && proto.getVersion.call( context ) === version) {
-                        return context;
-                }
-            }
-
-            throw new Error("$.WebGLModule::determineContext: Could not find WebGLImplementation with version " + version);
-        }
-
-        /**
-         * Get Currently used WebGL version
-         * @return {String|*}
-         */
-        get webglVersion() {
-            return this.webglContext.webGLVersion;
-        }
-
-        /**
-         * Set viewport dimensions.
-         * @param {Number} x
-         * @param {Number} y
-         * @param {Number} width
-         * @param {Number} height
-         * @param {Number} levels number of layers that are rendered, kind of 'depth' parameter, an integer
-         *
-         * @instance
-         * @memberof WebGLModule
-         */
-        setDimensions(x, y, width, height, levels) {
-            this.canvas.width = width;
-            this.canvas.height = height;
-            this.gl.viewport(x, y, width, height);
-            this.webglContext.setDimensions(x, y, width, height, levels);
-        }
-
-        /**
-         * Call to first-pass draw using WebGLProgram.
-         * @param {FPRenderPackage[]} source
-         * @return {FPOutput}
-         * @instance
-         * @memberof WebGLModule
-         */
-        firstPassProcessData(source) {
-            const program = this._programImplementations[this.webglContext.firstPassProgramKey];
-            if (this.useProgram(program, "first-pass")) {
-                program.load();
-            }
-            return program.use(source);
-        }
-
-        /**
-         * Call to second-pass draw
-         * @param {FPOutput} source
-         * @param {SPRenderPackage[]} renderArray
-         * @return {*}
-         */
-        secondPassProcessData(source, renderArray) {
-            const program = this._programImplementations[this.webglContext.secondPassProgramKey];
-            if (this.useProgram(program, "second-pass")) {
-                program.load(renderArray);
-            }
-            return program.use(source, renderArray);
-        }
-
-        /**
-         * Create and load the new WebGLProgram based on ShaderLayers and their controls.
-         * @param {OpenSeadragon.WebGLModule.Program} program
-         * @param {String} [key] optional ID for the program to use
-         * @return {String} ID for the program it was registered with
-         *
-         * @instance
-         * @protected
-         * @memberof WebGLModule
-         */
-        registerProgram(program, key = undefined) {
-            key = key || String(Date.now());
-
-            if (!program) {
-                program = this._programImplementations[key];
-            }
-            if (this._programImplementations[key]) {
-                this.deleteProgram(key);
-            }
-
-            const webglProgram = this.gl.createProgram();
-            program._webGLProgram = webglProgram;
-            program.build(this._shaders, this._shadersOrder || Object.keys(this._shaders)); //todo somehow make shaders registrable to different workflows
-            // Used also to re-compile, set requiresLoad to true
-            program.requiresLoad = true;
-
-            if (!program.vertexShader || !program.fragmentShader) {
-                this.gl.deleteProgram(webglProgram);
-                program._webGLProgram = null;
-                throw Error("Program does not define vertexShader or fragmentShader shader property!");
-            }
-
-            this._programImplementations[key] = program;
-            if ($.WebGLModule.WebGLImplementation._compileProgram(
-                webglProgram, this.gl, program, $.console.error, this.debug
-            )) {
-                program.created(webglProgram, this.canvas.width, this.canvas.height);
-                return key;
-            }
-            return undefined;
-        }
-
-        /**
-         * Switch program
-         * @param {OpenSeadragon.WebGLModule.Program|string} program instance or program key to use
-         * @param {string} name "first-pass" or "second-pass"
-         * @return {boolean} false if update is not necessary, true if update was necessary -- updates
-         * are initialization steps taken once after program is first loaded (after compilation)
-         * or when explicitly re-requested
-         */
-        useProgram(program, name) {
-            if (!(program instanceof $.WebGLModule.Program)) {
-                program = this.getProgram(program);
-            }
-
-            if (this.running && this._program === program) {
-                return false;
-            } else if (this._program) {
-                this._program.unload();
-            }
-
-            this._program = program;
-            this.gl.useProgram(program.webGLProgram);
-
-            const needsUpdate = this._program.requiresLoad;
-            this._program.requiresLoad = false;
-
-            if (needsUpdate) {
-                /**
-                 * todo better docs
-                 * Fired after program has been switched to (initially or when changed).
-                 * The event happens BEFORE JS logics executes within ShaderLayers.
-                 * @event program-used
-                 */
-                this.raiseEvent('program-used', {
-                    name: name,
-                    program: program,
-                    shaderLayers: this._shaders,
-                });
-
-                // initialize ShaderLayer's controls:
-                //      - set their values to default,
-                //      - if interactive register event handlers to their corresponding DOM elements created in the previous step
-
-                //todo consider events, consider doing within webgl context
-                if (name === "second-pass") {
-                    for (const shaderLayer of Object.values(this._shaders)) {
-                        shaderLayer.init();
-                    }
-                }
-            }
-
-            if (!this.running) {
-                //TODO: might not be the best place to call, timeout necessary to allow finish initialization of OSD before called
-                setTimeout(() => this.ready());
-                this.running = true;
-            }
-            return needsUpdate;
-        }
-
-        /**
-         *
-         */
-        requireLoad() {
-            //todo delete? we should enable requirement to re-load programs! maybe call on each program if not specified
-        }
-
-        /**
-         *
-         * @param {string} programKey
-         * @return {OpenSeadragon.WebGLModule.Program}
-         */
-        getProgram(programKey) {
-            return this._programImplementations[programKey];
-        }
-
-        /**
-         *
-         * @param {string} key program key to delete
-         */
-        deleteProgram(key) {
-            const implementation = this._programImplementations[key];
-            if (!implementation) {
-                return;
-            }
-            implementation.destroy();
-            this.gl.deleteProgram(implementation._webGLProgram);
-            this._programImplementations[key] = null;
-        }
-
-        /**
-         * Create and initialize new ShaderLayer instantion and its controls.
-         * @param id
-         * @param {ShaderConfig} shaderConfig object bound to a concrete ShaderLayer instance
-         * @returns {ShaderLayer} instance of the created shaderLayer
-         *
-         * @instance
-         * @memberof WebGLModule
-         */
-        createShaderLayer(id, shaderConfig) {
-            const Shader = $.WebGLModule.ShaderMediator.getClass(shaderConfig.type);
-            if (!Shader) {
-                throw new Error(`$.WebGLModule::createShaderLayer: Unknown shader type '${shaderConfig.type}'!`);
-            }
-
-            if (shaderConfig.visible === undefined) {
-                shaderConfig.visible = 1;
-            }
-
-            // TODO a bit dirty approach, make the program key usable from outside
-            const shader = new Shader(id, {
-                shaderConfig: shaderConfig,
-                webglContext: this.webglContext,
-                controls: shaderConfig._controls,
-                cache: shaderConfig._cache,
-                params: shaderConfig.params,
-                interactive: this.interactive,
-
-                // callback to re-render the viewport
-                invalidate: this.redrawCallback,
-                // callback to rebuild the WebGL program
-                rebuild: () => {
-                    this.registerProgram(null, this.webglContext.secondPassProgramKey);
-                },
-                // callback to reinitialize the drawer; NOT USED
-                refetch: this.refetchCallback
-            });
-
-            shader.construct();
-            this._shaders[id] = shader;
-            return shader;
-        }
-
-        getAllShaders() {
-            return this._shaders;
-        }
-
-        /**
-         *
-         * @param order
-         */
-        setShaderLayerOrder(order) {
-            this._shadersOrder = order;
-        }
-
-        /**
-         *
-         * Retrieve the order
-         * @return {*}
-         */
-        getShaderLayerOrder() {
-            return this._shadersOrder;
-        }
-
-        /**
-         * Remove ShaderLayer instantion and its controls.
-         * @param {string} id shader id
-         *
-         * @instance
-         * @memberof WebGLModule
-         */
-        removeShader(id) {
-            const shader = this._shaders[id];
-            if (!shader) {
-                return;
-            }
-            shader.destroy();
-            delete this._shaders[id];
-        }
-
-        /**
-         * Clear all shaders
-         */
-        deleteShaders() {
-            for (let sId in this._shaders) {
-                this.removeShader(sId);
-            }
-        }
-
-        /**
-         * @param {Boolean} enabled if true enable alpha blending, otherwise disable blending
-         *
-         * @instance
-         * @memberof WebGLModule
-         */
-        setDataBlendingEnabled(enabled) {
-            if (enabled) {
-                this.gl.enable(this.gl.BLEND);
-
-                // standard alpha blending
-                this.gl.blendFunc(this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
-            } else {
-                this.gl.disable(this.gl.BLEND);
-            }
-        }
-
-        destroy() {
-            for (let pId in this._programImplementations) {
-                this.deleteProgram(pId);
-            }
-            this.webglContext.destroy();
-            this._programImplementations = {};
-        }
-    };
-
-
-    // STATIC PROPERTIES
-    /**
-     * ID pattern allowed for WebGLModule. ID's are used in GLSL to distinguish uniquely between individual ShaderLayer's generated code parts
-     * @property
-     * @type {RegExp}
-     * @memberof WebGLModule
-     */
-    $.WebGLModule.idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
-
-    $.WebGLModule.BLEND_MODE = [
-        'mask',
-        'source-over',
-        'source-in',
-        'source-out',
-        'source-atop',
-        'destination-over',
-        'destination-in',
-        'destination-out',
-        'destination-atop',
-        'lighten',
-        'darken',
-        'copy',
-        'xor',
-        'multiply',
-        'screen',
-        'overlay',
-        'color-dodge',
-        'color-burn',
-        'hard-light',
-        'soft-light',
-        'difference',
-        'exclusion',
-        'hue',
-        'saturation',
-        'color',
-        'luminosity',
-    ];
-
-    $.WebGLModule.jsonReplacer = function (key, value) {
-        return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
-    };
-})(OpenSeadragon);
-
-(function($) {
-    /**
-     * Organizer of ShaderLayers.
-     *
-     * @property {object} _layers           storage of ShaderLayers, {ShaderLayer.type(): ShaderLayer}
-     * @property {Boolean} _acceptsShaders  allow new ShaderLayer registrations
-     *
-     * @class OpenSeadragon.WebGLModule.ShaderMediator
-     * @memberOf OpenSeadragon.WebGLModule
-     */
-    $.WebGLModule.ShaderMediator = class {
-        /**
-         * Register ShaderLayer.
-         * @param {typeof OpenSeadragon.WebGLModule.ShaderLayer} shaderLayer
-         */
-        static registerLayer(shaderLayer) {
-            if (this._acceptsShaders) {
-                if (this._layers[shaderLayer.type()]) {
-                    console.warn(`OpenSeadragon.WebGLModule.ShaderMediator::registerLayer: ShaderLayer ${shaderLayer.type()} already registered, overwriting the content!`);
-                }
-                this._layers[shaderLayer.type()] = shaderLayer;
-            } else {
-                console.warn("OpenSeadragon.WebGLModule.ShaderMediator::registerLayer: ShaderMediator is set to not accept new ShaderLayers!");
-            }
-        }
-
-        /**
-         * Enable or disable ShaderLayer registrations.
-         * @param {Boolean} accepts
-         */
-        static setAcceptsRegistrations(accepts) {
-            if (accepts === true || accepts === false) {
-                this._acceptsShaders = accepts;
-            } else {
-                console.warn("OpenSeadragon.WebGLModule.ShaderMediator::setAcceptsRegistrations: Accepts parameter must be either true or false!");
-            }
-        }
-
-        /**
-         * Get the ShaderLayer implementation.
-         * @param {String} shaderType equals to a wanted ShaderLayers.type()'s return value
-         * @return {typeof OpenSeadragon.WebGLModule.ShaderLayer}
-         */
-        static getClass(shaderType) {
-            return this._layers[shaderType];
-        }
-
-        /**
-         * Get all available ShaderLayers.
-         * @return {[typeof OpenSeadragon.WebGLModule.ShaderLayer]}
-         */
-        static availableShaders() {
-            return Object.values(this._layers);
-        }
-
-        /**
-         * Get all available ShaderLayer types.
-         * @return {[String]}
-         */
-        static availableTypes() {
-            return Object.keys(this._layers);
-        }
-    };
-    // STATIC PROPERTIES
-    $.WebGLModule.ShaderMediator._acceptsShaders = true;
-    $.WebGLModule.ShaderMediator._layers = {};
-
-
-
-    /**
-     * Interface for classes that implement any rendering logic and are part of the final WebGLProgram.
-     *
-     * @property {Object} defaultControls default controls for the ShaderLayer
-     * @property {Object} customParams
-     * @property {Object} modes
-     * @property {Object} filters
-     * @property {Object} filterNames
-     * @property {Object} __globalIncludes
-     *
-     * @interface OpenSeadragon.WebGLModule.ShaderLayer
-     * @memberOf OpenSeadragon.WebGLModule
-     */
-    $.WebGLModule.ShaderLayer = class {
-        /**
-         * @typedef channelSettings
-         * @type {Object}
-         * @property {Function} acceptsChannelCount
-         * @property {String} description
-         */
-
-        /**
-         * @param {String} id unique identifier
-         * @param {Object} privateOptions
-         * @param {Object} privateOptions.shaderConfig              object bind with this ShaderLayer
-         * @param {WebGLImplementation} privateOptions.webglContext
-         * @param {Object} privateOptions.controls
-         * @param {Object} privateOptions.cache
-         *
-         * @param {Function} privateOptions.invalidate  // callback to re-render the viewport
-         * @param {Function} privateOptions.rebuild     // callback to rebuild the WebGL program
-         * @param {Function} privateOptions.refetch     // callback to reinitialize the whole WebGLDrawer; NOT USED
-         *
-         * @constructor
-         * @memberOf WebGLModule.ShaderLayer
-         */
-        constructor(id, privateOptions) {
-            // unique identifier of this ShaderLayer for WebGLModule
-            this.id = id;
-            // unique identifier of this ShaderLayer for WebGLProgram
-            this.uid = this.constructor.type().replaceAll('-', '_') + '_' + id;
-            if (!$.WebGLModule.idPattern.test(this.uid)) {
-                console.error(`Invalid ID for the shader: ${id} does not match to the pattern`, $.WebGLModule.idPattern);
-            }
-
-            this.__shaderConfig = privateOptions.shaderConfig;
-            this.webglContext = privateOptions.webglContext;
-            this._interactive = privateOptions.interactive;
-            this._cache = privateOptions.cache ? privateOptions.cache : {};
-            this._customControls = privateOptions.params ? privateOptions.params : {};
-
-            this.invalidate = privateOptions.invalidate;
-            this._rebuild = privateOptions.rebuild;
-            this._refetch = privateOptions.refetch;
-
-            // channels used for sampling data from the texture
-            this.__channels = null;
-            // which blend mode is being used
-            this._mode = null;
-            // parameters used for applying filters
-            this.__scalePrefix = null;
-            this.__scaleSuffix = null;
-        }
-
-        /**
-         * Manuall constructor for ShaderLayer. Keeped for backward compatibility.
-         */
-        construct() {
-            // set up the color channel(s) for texture sampling
-            this.resetChannel(this._customControls);
-            // set up the blending mode
-            this.resetMode(this._customControls);
-            // set up the filters to be applied to sampled data from the texture
-            this.resetFilters(this._customControls);
-        }
-
-        // STATIC METHODS
-        /**
-         * Parses value to a float string representation with given precision (length after decimal)
-         * @param {number} value value to convert
-         * @param {number} defaultValue default value on failure
-         * @param {number} precisionLen number of decimals
-         * @return {string}
-         */
-        static toShaderFloatString(value, defaultValue, precisionLen = 5) {
-            if (!Number.isInteger(precisionLen) || precisionLen < 0 || precisionLen > 9) {
-                precisionLen = 5;
-            }
-            try {
-                return value.toFixed(precisionLen);
-            } catch (e) {
-                return defaultValue.toFixed(precisionLen);
-            }
-        }
-
-        // METHODS TO (re)IMPLEMENT WHEN EXTENDING
-        /**
-         * @returns {String} key under which is the shader registered, should be unique!
-         */
-        static type() {
-            throw "ShaderLayer::type() must be implemented!";
-        }
-
-        /**
-         * @returns {String} name of the ShaderLayer (user-friendly)
-         */
-        static name() {
-            throw "ShaderLayer::name() must be implemented!";
-        }
-
-        /**
-         * @returns {String} optional description
-         */
-        static description() {
-            return "No description of the ShaderLayer.";
-        }
-
-        /**
-         * Declare the object for channel settings. One for each data source (NOT USED, ALWAYS RETURNS ARRAY OF ONE OBJECT; for backward compatibility the array is returned)
-         * @returns {[channelSettings]}
-         */
-        static sources() {
-            throw "ShaderLayer::sources() must be implemented!";
-        }
-
-        /**
-         * Declare supported controls by a particular shader,
-         * each control defined this way is automatically created for the shader.
-         *
-         * Structure:
-         * get defaultControls () => {
-         *     controlName: {
-                   default: {type: <>, title: <>, default: <>, interactive: true|false, ...},
-                   accepts: (type, instance) => <>,
-                   required: {type: <>, ...} [OPTIONAL]
-         *     }, ...
-         * }
-         *
-         * use: controlId: false to disable a specific control (e.g. all shaders
-         *  support opacity by default - use to remove this feature)
-         *
-         *
-         * Additionally, use_[...] value can be specified, such controls enable shader
-         * to specify default or required values for built-in use_[...] params. Example:
-         * {
-         *     use_channel0: {
-         *         default: "bg"
-         *     },
-         *     use_channel1: {
-         *         required: "rg"
-         *     },
-         *     use_gamma: {
-         *         default: 0.5
-         *     },
-         * }
-         * reads by default for texture 1 channels 'bg', second texture is always forced to read 'rg',
-         * textures apply gamma filter with 0.5 by default if not overridden
-         * todo: allow also custom object without structure being specified (use in custom manner,
-         *  but limited in automated docs --> require field that summarises its usage)
-         *
-         * @member {object}
-         */
-        static get defaultControls() {
-            return {};
-        }
-
-        /**
-         * Code executed to create the output color. The code
-         * must always return a vec4 value, otherwise the program
-         * will fail to compile (this code actually runs inside a glsl vec4 function() {...here...}).
-         *
-         * DO NOT SAMPLE TEXTURE MANUALLY: use this.sampleChannel(...) to generate the sampling code
-         *
-         * @return {string}
-         */
-        getFragmentShaderExecution() {
-            throw "ShaderLayer::getFragmentShaderExecution must be implemented!";
-        }
-
-        /**
-         * Code placed outside fragment shader's main function.
-         * By default, it includes all definitions of controls defined in this.defaultControls.
-         *
-         * ANY VARIABLE NAME USED IN THIS FUNCTION MUST CONTAIN UNIQUE ID: this.uid
-         * DO NOT SAMPLE TEXTURE MANUALLY: use this.sampleChannel(...) to generate the sampling code
-         * WHEN OVERRIDING, INCLUDE THE OUTPUT OF THIS METHOD AT THE BEGINNING OF THE NEW OUTPUT.
-         *
-         * @return {string} glsl code
-         */
-        getFragmentShaderDefinition() {
-            const glsl = [];
-            return glsl.join("\n    ");
-        }
-
-        /**
-         * Initialize the ShaderLayer's controls.
-         */
-        init() {
-        }
-
-        // GLSL LOGIC (getFragmentShaderDefinition and getFragmentShaderExecution could also have been placed in this section)
-        /**
-         * Called from the the WebGLImplementation's loadProgram function.
-         * For every control owned by this ShaderLayer connect control.glLocation attribute to it's corresponding glsl variable.
-         * @param {WebGLProgram} program
-         * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
-         */
-        glLoaded(program, gl) {
-        }
-
-        /**
-         * Called from the the WebGLImplementation's useProgram function.
-         * For every control owned by this ShaderLayer fill it's corresponding glsl variable.
-         * @param {WebGLProgram} program WebglProgram instance
-         * @param {WebGLRenderingContext|WebGL2RenderingContext} gl WebGL Context
-         */
-        glDrawing(program, gl) {
-        }
-
-        /**
-         * Include GLSL shader code on global scope (e.g. define function that is repeatedly used).
-         * @param {String} key a key under which is the code stored
-         * @param {String} code GLSL code to add to the WebGL shader
-         */
-        includeGlobalCode(key, code) {
-            const container = this.constructor.__globalIncludes;
-            if (container[key]) {
-                console.warn('$.WebGLModule.ShaderLayer::includeGlobalCode: Global code with key', key, 'already exists in this.__globalIncludes. Overwriting the content!');
-            }
-            container[key] = code;
-        }
-
-        /**
-         * Called when shader is destructed
-         */
-        destroy() {
-        }
-
-        // CACHE LOGIC
-        /**
-         * Load value from the cache, return default value if not found.
-         *
-         * @param {String} name
-         * @param {String} defaultValue
-         * @return {String}
-         */
-        loadProperty(name, defaultValue) {
-            const value = this._cache[name];
-            return value !== undefined ? value : defaultValue;
-        }
-
-        /**
-         * Store value in the cache.
-         * @param {String} name
-         * @param {String} value
-         */
-        storeProperty(name, value) {
-            this._cache[name] = value;
-        }
-
-
-
-        // TEXTURE SAMPLING LOGIC
-        /**
-         * Set color channel(s) for texture sampling.
-         * @param {Object} options
-         * @param {String} options.use_channel[X] "r", "g" or "b" channel to sample index X, default "r"
-         */
-        resetChannel(options = {}) {
-            if (Object.keys(options) === 0) {
-                options = this._customControls;
-            }
-
-            // regex to compare with value used with use_channel, to check its correctness
-            const channelPattern = new RegExp('[rgba]{1,4}');
-            const parseChannel = (controlName, def, sourceDef) => {
-                const predefined = this.constructor.defaultControls[controlName];
-
-                if (options[controlName] || predefined) {
-                    let channel = predefined ? (predefined.required ? predefined.required : predefined.default) : undefined;
-                    if (!channel) {
-                        channel = this.loadProperty(controlName, options[controlName]);
-                    }
-
-                    // (if channel is not defined) or (is defined and not string) or (is string and doesn't contain __channelPattern)
-                    if (!channel || typeof channel !== "string" || channelPattern.exec(channel) === null) {
-                        console.warn(`Invalid channel '${controlName}'. Will use channel '${def}'.`, channel, options);
-                        this.storeProperty(controlName, def);
-                        channel = def;
-                    }
-
-                    if (!sourceDef.acceptsChannelCount(channel.length)) {
-                        throw `${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}`;
-                    }
-
-                    if (channel !== options[controlName]) {
-                        this.storeProperty(controlName, channel);
-                    }
-                    return channel;
-                }
-                return def;
-            };
-
-            this.__channels = this.constructor.sources().map((source, i) => parseChannel(`use_channel${i}`, "r", source));
-        }
-
-        /**
-         * Method for texture sampling with applied channel restrictions and filters.
-         *
-         * @param {String} textureCoords valid GLSL vec2 object
-         * @param {Number} otherDataIndex UNUSED; index of the data source, for backward compatibility left here
-         * @param {Boolean} raw whether to output raw value from the texture (do not apply filters)
-         *
-         * @return {String} glsl code for correct texture sampling within the ShaderLayer's methods for generating glsl code (e.g. getFragmentShaderExecution)
-         */
-        sampleChannel(textureCoords, otherDataIndex = 0, raw = false) {
-            const chan = this.__channels[otherDataIndex];
-            let sampled = `${this.webglContext.sampleTexture(otherDataIndex, textureCoords)}.${chan}`;
-
-            if (raw) {
-                return sampled;
-            }
-            return this.filter(sampled);
-        }
-
-        /**
-         *
-         * @param otherDataIndex
-         * @return {never}
-         */
-        getTextureSize(otherDataIndex = 0) {
-            return this.webglContext.getTextureSize(otherDataIndex);
-        }
-
-
-        // BLENDING LOGIC
-        /**
-         * Set blending mode.
-         * @param {Object} options
-         * @param {String} options.use_mode blending mode to use: one of supportedUseModes
-         */
-        resetMode(options = {}) {
-            this._mode = this._resetOption("use_mode", this.webglContext.supportedUseModes, options);
-            this._blend = this._resetOption("use_blend", OpenSeadragon.WebGLModule.BLEND_MODE, options);
-        }
-
-        _resetOption(name, supportedValueList, options = {}) {
-            let result;
-            if (!options) {
-                options = this._customControls;
-            }
-
-            const predefined = this.constructor.defaultControls[name];
-            // if required, set mode to required
-            result = predefined && predefined.required;
-
-            if (!result) {
-                if (options[name]) {
-                    // firstly try to load from cache, if not in cache, use options.use_mode
-                    result = this.loadProperty(name, options[name]);
-
-                    // if mode was not in the cache and we got default value = options.use_mode, store it in the cache
-                    if (result === options[name]) {
-                        this.storeProperty(name, result);
-                    }
-                } else {
-                    result = (predefined && predefined.default) || supportedValueList[0];
-                }
-            }
-
-            if (!supportedValueList.includes(result)) {
-                $.console.warn(`Invalid ${name}: ${result}. Using default`, supportedValueList[0]);
-                return supportedValueList[0];
-            }
-            return result;
-        }
-
-        /**
-         * @returns {String} GLSL code of the custom blend function
-         * TODO configurable...
-         */
-        getCustomBlendFunction(functionName) {
-            let code = this.webglContext.getBlendingFunction(this._blend);
-            if (!code) {
-                $.console.warn("Invalid blending - using default", this._blend, this);
-                this._blend = 'mask';
-                code = this.webglContext.getBlendingFunction(this._blend);
-            }
-            return `vec4 ${functionName}(vec4 fg, vec4 bg) {
-${code}
-}`;
-        }
-
-        /**
-         * Get JSON configuration
-         * @return {ShaderConfig}
-         */
-        getConfig() {
-            return this.__shaderConfig;
-        }
-
-        // FILTERS LOGIC
-        /**
-         * Set filters for a ShaderLayer.
-         * @param {Object} options contains filters to apply, currently supported are "use_gamma", "use_exposure", "use_logscale"
-         */
-        resetFilters(options = {}) {
-            if (Object.keys(options) === 0) {
-                options = this._customControls;
-            }
-
-            this.__scalePrefix = [];
-            this.__scaleSuffix = [];
-            for (let key in this.constructor.filters) {
-                const predefined = this.constructor.defaultControls[key];
-                let value = predefined ? predefined.required : undefined;
-                if (value === undefined) {
-                    if (options[key]) {
-                        value = this.loadProperty(key, options[key]);
-                    }
-                    else {
-                        value = predefined ? predefined.default : undefined;
-                    }
-                }
-
-                if (value !== undefined) {
-                    let filter = this.constructor.filters[key](value);
-                    this.__scalePrefix.push(filter[0]);
-                    this.__scaleSuffix.push(filter[1]);
-                }
-            }
-            this.__scalePrefix = this.__scalePrefix.join("");
-            this.__scaleSuffix = this.__scaleSuffix.reverse().join("");
-        }
-
-        /**
-         * Apply global filters on value
-         * @param {String} value GLSL code string, value to filter
-         * @return {String} filtered value (GLSL oneliner without ';')
-         */
-        filter(value) {
-            return `${this.__scalePrefix}${value}${this.__scaleSuffix}`;
-        }
-
-        /**
-         * Set filter value
-         * @param filter filter name
-         * @param value value of the filter
-         */
-        setFilterValue(filter, value) {
-            if (!this.constructor.filterNames[filter]) {
-                console.error("Invalid filter name", filter);
-                return;
-            }
-            this.storeProperty(filter, value);
-        }
-
-        /**
-         * Get the filter value (alias for loadProperty(...)
-         * @param {String} filter filter to read the value of
-         * @param {String} defaultValue
-         * @return {String} stored filter value or defaultValue if no value available
-         */
-        getFilterValue(filter, defaultValue) {
-            return this.loadProperty(filter, defaultValue);
-        }
-
-
-
-        // UTILITIES
-        /**
-         * Evaluates option flag, e.g. any value that indicates boolean 'true'
-         * @param {*} value value to interpret
-         * @return {Boolean} true if the value is considered boolean 'true'
-         */
-        isFlag(value) {
-            return value === "1" || value === true || value === "true";
-        }
-
-        isFlagOrMissing(value) {
-            return value === undefined || this.isFlag(value);
-        }
-
-        /**
-         * Parses value to a float string representation with given precision (length after decimal)
-         * @param {Number} value value to convert
-         * @param {Number} defaultValue default value on failure
-         * @param {Number} precisionLen number of decimals
-         * @return {String}
-         */
-        toShaderFloatString(value, defaultValue, precisionLen = 5) {
-            return this.constructor.toShaderFloatString(value, defaultValue, precisionLen);
-        }
-
-        /**
-         * Get the blend mode.
-         * @return {String}
-         */
-        get mode() {
-            return this._mode;
-        }
-    };
-
-    /**
-     * Declare custom parameters for documentation purposes.
-     * Can set default values to provide sensible defaults.
-     * Requires only 'usage' parameter describing the use.
-     * Unlike controls, these values are not processed in any way.
-     * Of course you don't have to define your custom parameters,
-     * but then these won't be documented in any nice way. Note that
-     * the value can be an object, or a different value (e.g., an array)
-     * {
-     *     customParamId: {
-     *         default: {myItem: 1, myValue: "string" ...}, [OPTIONAL]
-     *         usage: "This parameter can be used like this and that.",
-     *         required: {type: <> ...} [OPTIONAL]
-     *     }, ...
-     * }
-     * @type {any}
-     */
-    $.WebGLModule.ShaderLayer.customParams = {};
-
-    /**
-     * Parameter to save shaderLayer's functionality that can be shared and reused between ShaderLayer instantions.
-     */
-    $.WebGLModule.ShaderLayer.__globalIncludes = {};
-
-
-    //not really modular
-    //add your filters here if you want... function that takes parameter (number)
-    //and returns prefix and suffix to compute oneliner filter
-    //should start as 'use_[name]' for namespace collision avoidance (params object)
-    //expression should be wrapped in parenthesses for safety: ["(....(", ")....)"] in the middle the
-    // filtered variable will be inserted, notice pow does not need inner brackets since its an argument...
-    //note: pow avoided in gamma, not usable on vectors, we use pow(x, y) === exp(y*log(x))
-    // TODO: implement filters as shader nodes instead!
-    $.WebGLModule.ShaderLayer.filters = {};
-    $.WebGLModule.ShaderLayer.filters["use_gamma"] = (x) => ["exp(log(", `) / ${$.WebGLModule.ShaderLayer.toShaderFloatString(x, 1)})`];
-    $.WebGLModule.ShaderLayer.filters["use_exposure"] = (x) => ["(1.0 - exp(-(", `)* ${$.WebGLModule.ShaderLayer.toShaderFloatString(x, 1)}))`];
-    $.WebGLModule.ShaderLayer.filters["use_logscale"] = (x) => {
-        x = $.WebGLModule.ShaderLayer.toShaderFloatString(x, 1);
-        return [`((log(${x} + (`, `)) - log(${x})) / (log(${x}+1.0)-log(${x})))`];
-    };
-
-    $.WebGLModule.ShaderLayer.filterNames = {};
-    $.WebGLModule.ShaderLayer.filterNames["use_gamma"] = "Gamma";
-    $.WebGLModule.ShaderLayer.filterNames["use_exposure"] = "Exposure";
-    $.WebGLModule.ShaderLayer.filterNames["use_logscale"] = "Logarithmic scale";
-})(OpenSeadragon);
-
-(function($) {
-    /**
-     * @interface OpenSeadragon.WebGLModule.WebGLImplementation
-     * Interface for the WebGL rendering implementation which can run on various GLSL versions.
-     */
-    $.WebGLModule.WebGLImplementation = class {
-        /**
-         * Create a WebGL rendering implementation.
-         * @param {WebGLModule} renderer owner of this implementation
-         * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
-         * @param {String} webGLVersion "1.0" or "2.0"
-         */
-        constructor(renderer, gl, webGLVersion) {
-            //todo renderer name is misleading, rename
-            this.renderer = renderer;
-            this.gl = gl;
-            this.webGLVersion = webGLVersion;
-        }
-
-        /**
-         * Static WebGLRenderingContext creation (to avoid class instantiation in case of missing support).
-         * @param {HTMLCanvasElement} canvas
-         * @param {Object} contextAttributes desired options used for the canvas webgl context creation
-         * @return {WebGLRenderingContext|WebGL2RenderingContext}
-         */
-        static createWebglContext(canvas, webGLVersion, contextAttributes) {
-            // indicates that the canvas contains an alpha buffer
-            contextAttributes.alpha = true;
-            // indicates that the page compositor will assume the drawing buffer contains colors with pre-multiplied alpha
-            contextAttributes.premultipliedAlpha = true;
-
-            if (webGLVersion === "1.0") {
-                return canvas.getContext('webgl', contextAttributes);
-            } else {
-                return canvas.getContext('webgl2', contextAttributes);
-            }
-        }
-
-        get firstPassProgramKey() {
-            throw("$.WebGLModule.WebGLImplementation::firstPassProgram must be implemented!");
-        }
-
-        get secondPassProgramKey() {
-            throw("$.WebGLModule.WebGLImplementation::secondPassProgram must be implemented!");
-        }
-
-        /**
-         * Init phase
-         */
-        init() {
-
-        }
-
-        /**
-         * Attach shaders and link WebGLProgram, catch errors.
-         * @param {WebGLProgram} program
-         * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
-         * @param options build options
-         * @param {String} options.vertexShader
-         * @param {String} options.fragmentShader
-         * @param {function} onError
-         * @param {boolean} debug
-         * @return {boolean} true if program was built successfully
-         */
-        static _compileProgram(program, gl, options, onError, debug = false) {
-            /* Napriklad gl.getProgramParameter(program, gl.LINK_STATUS) pre kind = "Program", status = "LINK", value = program */
-            function ok(kind, status, value, sh) {
-                if (!gl['get' + kind + 'Parameter'](value, gl[status + '_STATUS'])) {
-                    $.console.error((sh || 'LINK') + ':\n' + gl['get' + kind + 'InfoLog'](value));
-                    return false;
-                }
-                return true;
-            }
-
-            /* Attach shader to the WebGLProgram, return true if valid. */
-            function useShader(gl, program, data, type) {
-                let shader = gl.createShader(gl[type]);
-                gl.shaderSource(shader, data);
-                gl.compileShader(shader);
-                gl.attachShader(program, shader);
-                program[type] = shader;
-                return ok('Shader', 'COMPILE', shader, type);
-            }
-
-            function numberLines(str) {
-                // from https://stackoverflow.com/questions/49714971/how-to-add-line-numbers-to-beginning-of-each-line-in-string-in-javascript
-                return str.split('\n').map((line, index) => `${index + 1} ${line}`).join('\n');
-            }
-
-            // Attaching shaders to WebGLProgram failed
-            if (!useShader(gl, program, options.vertexShader, 'VERTEX_SHADER') ||
-                !useShader(gl, program, options.fragmentShader, 'FRAGMENT_SHADER')) {
-                onError("Unable to correctly build WebGL shaders.",
-                    "Attaching of shaders to WebGLProgram failed. For more information, see logs in the $.console.");
-                $.console.warn("VERTEX SHADER\n", numberLines( options.vertexShader ));
-                $.console.warn("FRAGMENT SHADER\n", numberLines( options.fragmentShader ));
-                return false;
-            } else { // Shaders attached
-                gl.linkProgram(program);
-                if (!ok('Program', 'LINK', program)) {
-                    onError("Unable to correctly build WebGL program.",
-                        "Linking of WebGLProgram failed. For more information, see logs in the $.console.");
-                    $.console.warn("VERTEX SHADER\n", numberLines( options.vertexShader ));
-                    $.console.warn("FRAGMENT SHADER\n", numberLines( options.fragmentShader ));
-                    return false;
-                } else if (debug) {
-                    $.console.info("VERTEX SHADER\n", numberLines( options.vertexShader ));
-                    $.console.info("FRAGMENT SHADER\n", numberLines( options.fragmentShader ));
-                }
-                return true;
-            }
-        }
-
-        /**
-         * Get WebGL version of the implementation.
-         * @return {String} "1.0" or "2.0"
-         */
-        getVersion() {
-            throw("$.WebGLModule.WebGLImplementation::getVersion() must be implemented!");
-        }
-
-        sampleTexture() {
-            throw("$.WebGLModule.WebGLImplementation::sampleTexture() must be implemented!");
-        }
-
-        getTextureSize() {
-            throw("$.WebGLModule.WebGLImplementation::getTextureSize() must be implemented!");
-        }
-
-        getShaderLayerGLSLIndex() {
-            throw("$.WebGLModule.WebGLImplementation::getShaderLayerGLSLIndex() must be implemented!");
-        }
-
-        createProgram() {
-            throw("$.WebGLModule.WebGLImplementation::createProgram() must be implemented!");
-        }
-
-        loadProgram() {
-            throw("$.WebGLModule.WebGLImplementation::loadProgram() must be implemented!");
-        }
-
-        useProgram() {
-            throw("$.WebGLModule.WebGLImplementation::useProgram() must be implemented!");
-        }
-
-        /**
-         * Set viewport dimensions. Parent context already applied correct viewport settings to the
-         * OpenGL engine. These values are already configured, but the webgl context can react to them.
-         * @param {Number} x
-         * @param {Number} y
-         * @param {Number} width
-         * @param {Number} height
-         * @param {Number} levels number of layers that are rendered, kind of 'depth' parameter, an integer
-         *
-         * @instance
-         * @memberof WebGLModule
-         */
-        setDimensions(x, y, width, height, levels) {
-            //no-op
-        }
-
-        destroy() {
-        }
-
-        /**
-         * Get supported render modes by the renderer. First should be the default.
-         * @return {string[]}
-         */
-        get supportedUseModes() {
-            return ["show", "mask", "mask_clip"];
-        }
-
-        /**
-         * Return sampling GLSL code (no function definition allowed) that implements blending passed by name
-         * available are vec4 arguments 'fg' and 'bg'
-         * e.g.:
-         *   return vec4(fg.rgb * bg.a, fg.a);
-         * @param {string} name one of OpenSeadragon.WebGLModule.BLEND_MODE
-         * @return {string}
-         */
-        getBlendingFunction(name) {
-            throw("$.WebGLModule.WebGLImplementation::blendingFunction must be implemented!");
-        }
-    };
-
-    /**
-     * WebGL Program instance
-     * @class OpenSeadragon.WebGLModule.Program
-     */
-    $.WebGLModule.Program = class {
-        constructor(context, gl) {
-            this.gl = gl;
-            this.context = context;
-            this._webGLProgram = null;
-
-            /**
-             *
-             * @type {boolean}
-             */
-            this.requiresLoad = true;
-            /**
-             *
-             * @type {string}
-             */
-            this.fragmentShader = "";
-            /**
-             *
-             * @type {string}
-             */
-            this.vertexShader = "";
-        }
-
-        get webGLProgram() {
-            if (!this._webGLProgram) {
-                throw Error("Program accessed without registration - did you call this.renderer.registerProgram()?");
-            }
-            return this._webGLProgram;
-        }
-
-        /**
-         *
-         * @param shaderMap
-         * @param shaderKeys
-         */
-        build(shaderMap, shaderKeys) {
-        }
-
-        /**
-         * Create program.
-         * @param width
-         * @param height
-         */
-        created(width, height) {
-        }
-
-        /**
-         * Load() is done once per program lifetime.
-         * Request subsequent call
-         */
-        requireLoad() {
-            this.requiresLoad = true;
-        }
-
-        /**
-         * Load program. Arbitrary arguments.
-         * Called ONCE per shader lifetime. Should not be called twice
-         * unless requested by requireLoad() -- you should not set values
-         * that are lost when webgl program is changed.
-         */
-        load() {
-        }
-
-        /**
-         * Use program. Arbitrary arguments.
-         */
-        use() {
-        }
-
-        unload() {
-
-        }
-
-        /**
-         * Destroy program. No arguments.
-         */
-        destroy() {
-        }
-
-// TODO we might want to fire only for active program and do others when really encesarry or with some delay, best at some common implementation level
-        setDimensions(x, y, width, height, levels) {
-
-        }
-
-        /**
-         * Iterate GLSL code
-         */
-        printN(fn, number, padding = "") {
-            const output = new Array(number);
-            for (let i = 0; i < number; i++) {
-                output[i] = padding + fn(i);
-            }
-            return output.join('\n');
-        }
-    };
-
-    $.WebGLModule.WebGL10 = class extends $.WebGLModule.WebGLImplementation {
-        /**
-         * Create a WebGL 1.0 rendering implementation.
-         * @param {OpenSeadragon.WebGLModule} renderer
-         * @param {WebGLRenderingContext} gl
-         */
-        constructor(renderer, gl) {
-            // sets this.renderer, this.gl, this.webglVersion
-            super(renderer, gl, "1.0");
-            $.console.info("WebGl 1.0 renderer.");
-
-            this._viewport = new Float32Array([
-                0.0, 1.0, 1.0,
-                0.0, 0.0, 1.0,
-                1.0, 1.0, 1.0,
-                1.0, 0.0, 1.0
-            ]);
-            this._locationPosition = null;          // a_position, attribute for viewport
-            this._bufferPosition = null;            // buffer for viewport, will be filled with this._viewport
-
-            this._locationTransformMatrix = null;   // u_transform_matrix, uniform to apply to viewport coords to get the correct rendering coords
-
-            // maps ShaderLayer instantions to their GLSL indices (u_shaderLayerIndex)
-            this._shadersMapping = {};              // {shaderUID1: 1, shaderUID2: 2, ...<more shaders>...}
-            this._locationShaderLayerIndex = null;  // u_shaderLayerIndex, used to branch correctly to concrete ShaderLayer's rendering logic
-
-            this._locationTextures = null;          // u_textures, uniform array for textures
-            this._locationTextureCoords = null;     // a_texture_coords
-            this._bufferTextureCoords = null;       // buffer for texture coords
-
-            this._locationPixelSize = null;         // u_pixel_size
-            this._locationZoomLevel = null;         // u_zoom_level
-            this._locationGlobalAlpha = null;       // u_global_alpha
-        }
-
-        getVersion() {
-            return "1.0";
-        }
-
-        /**
-         * Expose GLSL code for texture sampling.
-         * @returns {string} glsl code for texture sampling
-         */
-        sampleTexture(index, vec2coords) {
-            return `osd_texture(${index}, ${vec2coords})`;
-        }
-
-        getTextureSize(index) {
-            return `osd_texture_size(${index})`;
-        }
-
-        /**
-         * Get glsl index of the ShaderLayer.
-         * @param {string} id ShaderLayer's uid
-         * @returns {Number} index of ShaderLayer in glsl
-         */
-        getShaderLayerGLSLIndex(shaderLayerUID) {
-            return this._shadersMapping[shaderLayerUID];
-        }
-
-        /**
-         * Create a WebGLProgram based on ShaderLayers supplied in an input parameter.
-         * @param {Object} shaderLayers map of ShaderLayers to use {shaderID: ShaderLayer}, where shaderID is a unique identifier of the ShaderLayer (NOT equal to ShaderLayer's uid !!!)
-         * @returns {WebGLProgram}
-         */
-        createProgram(shaderLayers) {
-            const gl = this.gl;
-            const program = gl.createProgram();
-
-            let definition = '',
-                execution = '',
-                customBlendFunctions = '';
-
-
-            // generate glsl code for each ShaderLayer, begin with index 1, 0 is reserved for the first-pass identity shader
-            let i = 1;
-            for (const shaderID in shaderLayers) {
-                const shaderLayer = shaderLayers[shaderID];
-                const shaderLayerIndex = i++;
-
-                // assign ShaderLayer its glsl index, later obtained by getShaderLayerGLSLIndex(shaderLayerUID)
-                this._shadersMapping[shaderLayer.uid] = shaderLayerIndex;
-
-                definition += `\n    // Definition of ${shaderLayer.constructor.type()} shader:\n`;
-                // returns string which corresponds to glsl code
-                definition += shaderLayer.getFragmentShaderDefinition();
-                definition += '\n';
-                definition += `
- ${this.getModeFunction()}
-    vec4 ${shaderLayer.uid}_execution() {${shaderLayer.getFragmentShaderExecution()}
-    }`;
-                definition += '\n\n';
-
-
-                execution += ` else if (u_shaderLayerIndex == ${shaderLayerIndex}) {
-            vec4 ${shaderLayer.uid}_out = ${shaderLayer.uid}_execution();`;
-
-                execution += `
-            ${shaderLayer.uid}_blend_mode(${shaderLayer.uid}_out);
-        }`;
-
-
-                // Todo webgl 1
-        //         if (shaderLayer.usesCustomBlendFunction()) {
-        //             customBlendFunctions += `
-        // else if (last_blend_func_id == ${shaderLayerIndex}) {
-        //     overall_color = ${shaderLayer.uid}_blend_func(last_color, overall_color);
-        // }`;
-        //         }
-            } // end of for cycle
-
-            const vertexShaderSource = this._getVertexShaderSource();
-            const fragmentShaderSource = this._getFragmentShaderSource(definition, execution, customBlendFunctions, $.WebGLModule.ShaderLayer.__globalIncludes);
-            const build = this.constructor._compileProgram(program, gl, {
-                vertexShader: vertexShaderSource,
-                fragmentShader: fragmentShaderSource
-            }, $.console.error, this.renderer.debug);
-
-            if (!build) {
-                throw new Error("$.WebGLModule.WebGL10::createProgram: WebGLProgram could not be built!");
-            }
-            return program;
-        }
-
-
-        /**
-         * Load the locations of glsl variables and initialize buffers.
-         * @param {WebGLProgram} program WebGLProgram to load
-         * @param {Object} shaderLayers map of ShaderLayers to load {shaderID: ShaderLayer}
-         */
-        loadProgram(program, shaderLayers) {
-            const gl = this.gl;
-
-            // load ShaderLayers' controls' glsl locations
-            for (const shaderLayer of Object.values(shaderLayers)) {
-                shaderLayer.glLoaded(program, gl);
-            }
-
-            // VERTEX shader
-            this._locationTransformMatrix = gl.getUniformLocation(program, "u_transform_matrix");
-
-            // initialize viewport attribute
-            this._locationPosition = gl.getAttribLocation(program, "a_position");
-            this._bufferPosition = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, this._bufferPosition);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0.0, 0.0, 0.0]), gl.STATIC_DRAW);
-            gl.enableVertexAttribArray(this._locationPosition);
-            gl.vertexAttribPointer(this._locationPosition, 3, gl.FLOAT, false, 0, 0);
-
-            // initialize texture coords attribute
-            this._locationTextureCoords = gl.getAttribLocation(program, "a_texture_coords");
-            this._bufferTextureCoords = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, this._bufferTextureCoords);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0.0, 0.0]), gl.STATIC_DRAW);
-            gl.enableVertexAttribArray(this._locationTextureCoords);
-            gl.vertexAttribPointer(this._locationTextureCoords, 2, gl.FLOAT, false, 0, 0);
-
-
-            // FRAGMENT shader
-            this._locationPixelSize = gl.getUniformLocation(program, "u_pixel_size");
-            this._locationZoomLevel = gl.getUniformLocation(program, "u_zoom_level");
-            this._locationGlobalAlpha = gl.getUniformLocation(program, "u_global_alpha");
-            this._locationShaderLayerIndex = gl.getUniformLocation(program, "u_shaderLayerIndex");
-
-            // initialize texture
-            this._locationTextures = gl.getUniformLocation(program, "u_textures");
-            gl.uniform1i(this._locationTextures, 0);
-            gl.activeTexture(gl.TEXTURE0);
-        }
-
-
-        /**
-         * Fill the glsl variables and draw.
-         * @param {WebGLProgram} program WebGLProgram in use
-
-         * @param {Object} tileInfo
-         * @param {Float32Array} tileInfo.transform 3*3 matrix that should be applied to viewport vertices
-         * @param {Number} tileInfo.zoom
-         * @param {Number} tileInfo.pixelSize
-         * @param {number} renderInfo.globalOpacity
-         * @param {Float32Array} tileInfo.textureCoords coordinates for texture sampling
-         *
-         * @param {ShaderLayer} shaderLayer ShaderLayer used for this draw call
-         * @param {WebGLTexture} texture gl.TEXTURE_2D used as a source of data for rendering
-         */
-        useProgram(program, tileInfo, shaderLayer, texture) {
-            const gl = this.gl;
-
-            // tell the ShaderLayer's controls to fill their uniforms
-            shaderLayer.glDrawing(program, gl);
-
-            // which ShaderLayer to use
-            const shaderLayerGLSLIndex = this.getShaderLayerGLSLIndex(shaderLayer.uid);
-            gl.uniform1i(this._locationShaderLayerIndex, shaderLayerGLSLIndex);
-
-            // fill the uniforms
-            gl.uniform1f(this._locationPixelSize, tileInfo.pixelSize);
-            gl.uniform1f(this._locationZoomLevel, tileInfo.zoom);
-            gl.uniform1f(this._locationGlobalAlpha, tileInfo.globalOpacity);
-
-            // viewport attribute
-            gl.bindBuffer(gl.ARRAY_BUFFER, this._bufferPosition);
-            gl.bufferData(gl.ARRAY_BUFFER, this._viewport, gl.STATIC_DRAW);
-
-            // texture coords
-            gl.bindBuffer(gl.ARRAY_BUFFER, this._bufferTextureCoords);
-            gl.bufferData(gl.ARRAY_BUFFER, tileInfo.textureCoords, gl.STATIC_DRAW);
-
-            // transform matrix
-            gl.uniformMatrix3fv(this._locationTransformMatrix, false, tileInfo.transform);
-
-            // texture
-            gl.bindTexture(gl.TEXTURE_2D, texture);
-
-            // draw triangle strip (two triangles)
-            // 0: start reading vertex data from the first vertex
-            // 4: use 4 vertices per instance (to form one triangle strip)
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        }
-
-
-        /**
-         * Draw using first-pass identity ShaderLayer into an off-screen texture.
-         * Function assumes that the framebuffer is already bound.
-         *
-         * @param {Float32Array} transformMatrix 3*3 matrix that should be applied to viewport vertices
-         * @param {Float32Array} textureCoords coordinates for texture sampling
-         * @param {WebGLTexture} texture gl.TEXTURE_2D used as a source of data for rendering
-         */
-        drawJoinTilesForViewport(transformMatrix, textureCoords, texture) {
-            const gl = this.gl;
-
-            // shaderLayer for the first-pass has special index = 0
-            gl.uniform1i(this._locationShaderLayerIndex, 0);
-
-            // viewport
-            gl.bindBuffer(gl.ARRAY_BUFFER, this._bufferPosition);
-            gl.bufferData(gl.ARRAY_BUFFER, this._viewport, gl.STATIC_DRAW);
-
-            // texture coords
-            gl.bindBuffer(gl.ARRAY_BUFFER, this._bufferTextureCoords);
-            gl.bufferData(gl.ARRAY_BUFFER, textureCoords, gl.STATIC_DRAW);
-
-            // transform matrix
-            gl.uniformMatrix3fv(this._locationTransformMatrix, false, transformMatrix);
-
-            // texture
-            gl.bindTexture(gl.TEXTURE_2D, texture);
-
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        }
-
-        // PRIVATE FUNCTIONS
-        /**
-         * Get glsl function handling textures usage.
-         * @returns {string} glsl code
-         */
-        _getTextureDefinition(instanceCount = 1) {
-            function sampleTextures() {
-                let retval = `if (index == 0) {
-            return texture2D(u_textures[0], coords);
-        }`;
-
-                if (instanceCount === 1) {
-                    return retval;
-                }
-
-                for (let i = 1; i < instanceCount; i++) {
-                    retval += ` else if (index == ${i}) {
-            return texture2D(u_textures[${i}], coords);
-        }`;
-                }
-
-                return retval;
-            }
-
-            return `
-    uniform sampler2D u_textures[${instanceCount}];
-    vec4 osd_texture(int index, vec2 coords) {
-        ${sampleTextures()}
-    }
-
-    // TODO: WebGL1 needs an uniform (here array probably)
-    ivec2 osd_texture_size(int index) {
-        return ivec2(1, 1);
-    }
-    `;
-        }
-
-        /**
-         * Get vertex shader's glsl code.
-         * @returns {string} vertex shader's glsl code
-         */
-        _getVertexShaderSource() {
-        const vertexShaderSource = `
-    precision mediump int;
-    precision mediump float;
-    /* This program is used for single-pass rendering and for second-pass during two-pass rendering. */
-
-    attribute vec2 a_texture_coords;
-    varying vec2 v_texture_coords;
-
-    attribute vec3 a_position;
-    uniform mat3 u_transform_matrix;
-
-    void main() {
-        v_texture_coords = a_texture_coords;
-        gl_Position = vec4(u_transform_matrix * a_position, 1.0);
-}`;
-
-        return vertexShaderSource;
-        }
-
-
-        /**
-         * Get fragment shader's glsl code.
-         * @param {string} definition ShaderLayers' glsl code placed outside the main function
-         * @param {string} execution ShaderLayers' glsl code placed inside the main function
-         * @param {string} customBlendFunctions ShaderLayers' glsl code of their custom blend functions
-         * @param {string} globalScopeCode ShaderLayers' glsl code shared between the their instantions
-         * @returns {string} fragment shader's glsl code
-         */
-        _getFragmentShaderSource(definition, execution, customBlendFunctions, globalScopeCode) {
-            const fragmentShaderSource = `
-    precision mediump int;
-    precision mediump float;
-    precision mediump sampler2D;
-
-    uniform float u_pixel_size;
-    uniform float u_zoom_level;
-    uniform float u_global_alpha;
-    uniform int u_shaderLayerIndex;
-
-
-    // TEXTURES
-    varying vec2 v_texture_coords;
-    ${this._getTextureDefinition()}
-
-    // UTILITY function
-    bool close(float value, float target) {
-        return abs(target - value) < 0.001;
-    }
-
-    // BLEND attributes
-    vec4 overall_color = vec4(.0);
-    vec4 last_color = vec4(.0);
-    vec4 current_color = vec4(.0);
-    int last_blend_func_id = -1000;
-    void deffered_blend();
-
-
-    // GLOBAL SCOPE CODE:${Object.keys(globalScopeCode).length !== 0 ?
-        Object.values(globalScopeCode).join("\n") :
-        '\n    // No global scope code here...'}
-
-    // DEFINITIONS OF SHADERLAYERS:${definition !== '' ? definition : '\n    // Any non-default shaderLayer here to define...'}
-
-
-    // DEFFERED BLENDING mechanism:
-    void deffered_blend() {
-        // predefined "additive blending":
-        if (last_blend_func_id == -1) {
-            overall_color = last_color + overall_color;
-
-        // predefined "premultiplied alpha blending":
-        } else if (last_blend_func_id == -2) {
-            vec4 pre_fg = vec4(last_color.rgb * last_color.a, last_color.a);
-            overall_color = pre_fg + overall_color * (1.0 - pre_fg.a);
-
-
-        // non-predefined, custom blending functions:
-        }${customBlendFunctions === '' ? '\n            // No custom blending function here...' : customBlendFunctions}
-    }
-
-
-    void main() {
-        // EXECUTIONS OF SHADERLAYERS:
-        ${execution}
-
-        // default case; should not happen
-        else {
-            if (osd_texture(0, v_texture_coords).rgba == vec4(.0)) {
-                gl_FragColor = vec4(.0);
-            } else { // render only where there's data in the texture
-                gl_FragColor = vec4(1, 0, 0, 0.5);
-            }
-            return;
-        }
-
-        // blend last level
-        deffered_blend();
-        gl_FragColor = overall_color * u_global_alpha;
-    }`;
-
-            return fragmentShaderSource;
-        }
-
-        /**
-         * TODO make private
-         * @returns {String} GLSL code of the ShaderLayer's blend mode's logic
-         */
-        getModeFunction(shaderLayer) {
-            let modeDefinition = `void ${shaderLayer.uid}_blend_mode(vec4 color) {`;
-            if (shaderLayer._mode === "show") {
-                modeDefinition += `
-        // blend last_color with overall_color using blend_func of the last shader using deffered blending
-        deffered_blend();
-        last_color = color;
-        // switch case -2 = predefined "premultiplied alpha blending"
-        last_blend_func_id = -2;
-    }`;
-            }
-            else if (shaderLayer._mode === "mask") {
-                modeDefinition += `
-        // blend last_color with overall_color using blend_func of the last shader using deffered blending
-        deffered_blend();
-        last_color = color;
-        // switch case pointing to this.getCustomBlendFunction() code
-        last_blend_func_id = ${this.getShaderLayerGLSLIndex(shaderLayer.uid)};
-    }`;
-            } else if (shaderLayer._mode === "mask_clip") {
-                modeDefinition += `
-        last_color = ${shaderLayer.uid}_blend_func(color, last_color);
-    }`;
-            }
-
-            return modeDefinition;
-        }
-    };
-
-})(OpenSeadragon);
-
-(function($) {
-    $.WebGLModule.WebGL20 = class extends $.WebGLModule.WebGLImplementation {
-    /**
-     * Create a WebGL 2.0 rendering implementation.
-     * @param {OpenSeadragon.WebGLModule} renderer
-     * @param {WebGL2RenderingContext} gl
-     */
-    constructor(renderer, gl) {
-        // sets this.renderer, this.gl, this.webGLVersion
-        super(renderer, gl, "2.0");
-        $.console.info("WebGl 2.0 renderer.");
-    }
-
-    get firstPassProgramKey() {
-        return "firstPass";
-    }
-
-    get secondPassProgramKey() {
-        return "secondPass";
-    }
-
-    init() {
-        //todo consider passing reference to this
-        this.renderer.registerProgram(new $.WebGLModule.WebGL20.FirstPassProgram(this, this.gl), "firstPass");
-        this.renderer.registerProgram(new $.WebGLModule.WebGL20.SecondPassProgram(this, this.gl), "secondPass");
-    }
-
-    getVersion() {
-        return "2.0";
-    }
-
-    /**
-     * Expose GLSL code for texture sampling.
-     * @returns {string} glsl code for texture sampling
-     */
-    sampleTexture(index, vec2coords) {
-        return `osd_texture(${index}, ${vec2coords})`;
-    }
-
-    getTextureSize(index) {
-        return `osd_texture_size(${index})`;
-    }
-
-    setDimensions(x, y, width, height, levels) {
-        this.renderer.getProgram(this.firstPassProgramKey).setDimensions(x, y, width, height, levels);
-        this.renderer.getProgram(this.secondPassProgramKey).setDimensions(x, y, width, height, levels);
-        //todo consider some elimination of too many calls
-    }
-
-    getBlendingFunction(name) {
-        return {
-            mask: `
-if (close(fg.a, 0.0))  return vec4(.0);
-return bg;`,
-            'source-over': `
-if (!stencilPasses) return bg;
-vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
-return pre_fg + bg * (1.0 - pre_fg.a);`,
-
-            'source-in': `
-if (!stencilPasses) return bg;
-return vec4(fg.rgb * bg.a, fg.a * bg.a);`,
-
-            'source-out': `
-if (!stencilPasses) return bg;
-return vec4(fg.rgb * (1.0 - bg.a), fg.a * (1.0 - bg.a));`,
-
-            'source-atop': `
-if (!stencilPasses) return bg;
-vec3 rgb = fg.rgb * bg.a + bg.rgb * (1.0 - fg.a);
-float a = fg.a * bg.a + bg.a * (1.0 - fg.a);
-return vec4(rgb, a);`,
-
-            'destination-over': `
-if (!stencilPasses) return bg;
-vec4 pre_bg = vec4(bg.rgb * bg.a, bg.a);
-return pre_bg + fg * (1.0 - pre_bg.a);`,
-
-            'destination-in': `
-if (!stencilPasses) return bg;
-return vec4(bg.rgb * fg.a, fg.a * bg.a);`,
-
-            'destination-out': `
-if (!stencilPasses) return bg;
-return vec4(bg.rgb * (1.0 - fg.a), bg.a * (1.0 - fg.a));`,
-
-            'destination-atop': `
-if (!stencilPasses) return bg;
-vec3 rgb = bg.rgb * fg.a + fg.rgb * (1.0 - bg.a);
-float a = bg.a * fg.a + fg.a * (1.0 - bg.a);
-return vec4(rgb, a);`,
-
-            lighten: `
-if (!stencilPasses) return bg;
-return blendAlpha(fg, bg, max(fg.rgb, bg.rgb));`,
-
-            darken: `
-if (!stencilPasses) return bg;
-return blendAlpha(fg, bg, min(fg.rgb, bg.rgb));`,
-
-            copy: `
-if (!stencilPasses) return bg;
-return fg;`,
-
-            xor: `
-if (!stencilPasses) return bg;
-vec3 rgb = fg.rgb * (1.0 - bg.a) + bg.rgb * (1.0 - fg.a);
-float a = fg.a + bg.a - 2.0 * fg.a * bg.a;
-return vec4(rgb, a);`,
-
-            multiply: `
-if (!stencilPasses) return bg;
-return blendAlpha(fg, bg, fg.rgb * bg.rgb);`,
-
-            screen: `
-if (!stencilPasses) return bg;
-return blendAlpha(fg, bg, 1.0 - (1.0 - fg.rgb) * (1.0 - bg.rgb));`,
-
-            overlay: `
-if (!stencilPasses) return bg;
-vec3 rgb = mix(2.0 * fg.rgb * bg.rgb, 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb), step(0.5, bg.rgb));
-return blendAlpha(fg, bg, rgb);`,
-
-            'color-dodge': `
-if (!stencilPasses) return bg;
-vec3 rgb = bg.rgb / (1.0 - fg.rgb + 1e-5);
-return blendAlpha(fg, bg, min(rgb, 1.0));`,
-
-            'color-burn': `
-if (!stencilPasses) return bg;
-vec3 rgb = 1.0 - ((1.0 - bg.rgb) / (fg.rgb + 1e-5));
-return blendAlpha(fg, bg, clamp(rgb, 0.0, 1.0));`,
-
-            'hard-light': `
-if (!stencilPasses) return bg;
-vec3 rgb = mix(2.0 * fg.rgb * bg.rgb, 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb), step(0.5, fg.rgb));
-return blendAlpha(fg, bg, rgb);`,
-
-            'soft-light': `
-if (!stencilPasses) return bg;
-vec3 rgb = (bg.rgb < 0.5)
-    ? (2.0 * fg.rgb * bg.rgb + fg.rgb * fg.rgb * (1.0 - 2.0 * bg.rgb))
-    : (sqrt(fg.rgb) * (2.0 * bg.rgb - 1.0) + 2.0 * fg.rgb * (1.0 - bg.rgb));
-return blendAlpha(fg, bg, clamp(rgb, 0.0, 1.0));`,
-
-            difference: `
-if (!stencilPasses) return bg;
-return blendAlpha(fg, bg, abs(bg.rgb - fg.rgb));`,
-
-            exclusion: `
-if (!stencilPasses) return bg;
-return blendAlpha(fg, bg, bg.rgb + fg.rgb - 2.0 * bg.rgb * fg.rgb);`,
-        }[name];
-    }
-};
-
-
-$.WebGLModule.WebGL20.SecondPassProgram = class extends $.WebGLModule.Program {
-    constructor(context, gl) {
-        super(context, gl);
-        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
-        //todo this might be limiting in some wild cases... make it configurable..? or consider 1d texture
-        this.textureMappingsUniformSize = 64;
-    }
-
-    get webGLProgram() {
-        if (!this._webGLProgram) {
-            throw Error("Program accessed without registration - did you call this.renderer.registerProgram()?");
-        }
-        return this._webGLProgram;
-    }
-
-    build(shaderMap, keyOrder) {
-        if (!keyOrder.length) {
-            // Todo prevent unimportant first init build call
-            this.vertexShader = this._getVertexShaderSource();
-            this.fragmentShader = this._getFragmentShaderSource('', '',
-                '', $.WebGLModule.ShaderLayer.__globalIncludes);
-            return;
-        }
-        let definition = '',
-            execution = `
-vec4 intermediate_color = vec4(.0);
-vec4 clip_color = vec4(.0);
-`,
-            customBlendFunctions = '';
-
-        const addShaderDefinition = shader => {
-            definition += `
-// ${shader.constructor.type()} - Definition
-${shader.getFragmentShaderDefinition()}
-// ${shader.constructor.type()} - Custom blending function for a given shader
-${shader.getCustomBlendFunction(shader.uid + "_blend_func")}
-// ${shader.constructor.type()} - Shader code execution
-vec4 ${shader.uid}_execution() {
-${shader.getFragmentShaderExecution()}
-}
-`;
-        };
-
-        let remainingBlenForShaderID = '';
-        const getRemainingBlending = () => { //todo next blend argument
-            if (remainingBlenForShaderID) {
-                const i = keyOrder.indexOf(remainingBlenForShaderID);
-                const shader = shaderMap[remainingBlenForShaderID];
-                // Set stencilPasses again: we are going to blend deferred data
-                return `
-    stencilPasses = texture(u_stencilTextures, vec3(v_texture_coords, float(${i}))).r > 0.95;
-    overall_color = ${shader.mode === "show" ? "blend_source_over" : shader.uid + "_blend_func"}(intermediate_color, overall_color);
-`;
-            }
-            return '';
-        };
-
-        let i = 0;
-        for (; i < keyOrder.length; i++) {
-            const previousShaderID = keyOrder[i];
-            const previousShaderLayer = shaderMap[previousShaderID];
-            const shaderConf = previousShaderLayer.getConfig();
-
-            if (shaderConf.type === "none" || shaderConf.error || !shaderConf.visible) {
-                //prevents the layer from being accounted for in the rendering (error or not visible)
-
-                // For explanation of this logics see main shader part below
-                if (previousShaderLayer._mode !== "mask_clip") {
-                    execution += `${getRemainingBlending()}
-// ${previousShaderLayer.constructor.type()} - Disabled (error or visible = false)
-intermediate_color = vec4(.0);`;
-                    remainingBlenForShaderID = previousShaderID;
-                } else {
-                    execution += `
-// ${previousShaderLayer.constructor.type()} - Disabled with Clipmask (error or visible = false)
-intermediate_color = ${previousShaderLayer.uid}_blend_func(vec4(.0), intermediate_color);`;
-                }
-                continue;
-            }
-
-            addShaderDefinition(previousShaderLayer);
-            execution += `
-    stencilPasses = texture(u_stencilTextures, vec3(v_texture_coords, float(${i}))).r > 0.95;
-    instance_id = ${i};
-    vec3 attrs_${i} = u_shaderVariables[${i}];
-    opacity = attrs_${i}.x;
-    pixelSize = attrs_${i}.y;
-    zoom = attrs_${i}.z;`;
-
-            // To understand the code below: show & mask are basically same modes: they blend atop
-            // of existing data. 'Show' just uses built-in alpha blending.
-            // However, mask_clip blends on the previous output only (and it can chain!).
-
-            if (previousShaderLayer._mode !== "mask_clip") {
-                    execution += `${getRemainingBlending()}
-// ${previousShaderLayer.constructor.type()} - Blending
-intermediate_color = ${previousShaderLayer.uid}_execution();
-intermediate_color.a = intermediate_color.a * opacity;`;
-                remainingBlenForShaderID = previousShaderID;
-            } else {
-                execution += `
-// ${previousShaderLayer.constructor.type()} - Clipmask
-clip_color = ${previousShaderLayer.uid}_execution();
-clip_color.a = clip_color.a * opacity;
-intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermediate_color);`;
-            }
-        } // end of for cycle
-
-        if (remainingBlenForShaderID) {
-            execution += getRemainingBlending();
-        }
-        this.vertexShader = this._getVertexShaderSource();
-        this.fragmentShader = this._getFragmentShaderSource(definition, execution,
-            customBlendFunctions, $.WebGLModule.ShaderLayer.__globalIncludes);
-    }
-
-    /**
-     * Create program.
-     * @param width
-     * @param height
-     */
-    created(width, height) {
-        const gl = this.gl;
-        const program = this.webGLProgram;
-
-        // Shader element indexes match element id (instance id) to position in the texture array
-        this._instanceOffsets = gl.getUniformLocation(program, "u_instanceOffsets");
-        this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes");
-        this._shaderVariables = gl.getUniformLocation(program, "u_shaderVariables");
-
-        this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
-        this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
-
-        this.vao = gl.createVertexArray();
-    }
-
-    /**
-     * Load program. No arguments.
-     */
-    load(renderArray) {
-        const gl = this.gl;
-        // ShaderLayers' controls
-        for (const renderInfo of renderArray) {
-            renderInfo.shader.glLoaded(this.webGLProgram, gl);
-        }
-    }
-
-    /**
-     * Use program. Arbitrary arguments.
-     */
-    use(source, renderArray) {
-        //todo flatten render array :/
-        const gl = this.gl;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.bindVertexArray(this.vao);
-
-        const shaderVariables = [];
-        const instanceOffsets = [];
-        const instanceTextureIndexes = [];
-        for (const renderInfo of renderArray) {
-            renderInfo.shader.glDrawing(this.webGLProgram, gl);
-
-            shaderVariables.push(renderInfo.opacity, renderInfo.pixelSize, renderInfo.zoom);
-
-            instanceOffsets.push(instanceTextureIndexes.length);
-            instanceTextureIndexes.push(...renderInfo.shader.getConfig().tiledImages);
-        }
-
-        gl.uniform1iv(this._instanceOffsets, instanceOffsets);
-        gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
-        gl.uniform3fv(this._shaderVariables, shaderVariables);
-
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, source.texture);
-        gl.uniform1i(this._texturesLocation, 0);
-
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, source.stencil);
-        gl.uniform1i(this._stencilLocation, 1);
-
-
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        gl.bindVertexArray(null);
-    }
-
-    /**
-     * Destroy program. No arguments.
-     */
-    destroy() {
-        this.gl.deleteVertexArray(this.vao);
-    }
-
-    // TODO we might want to fire only for active program and do others when really encesarry or with some delay, best at some common implementation level
-    setDimensions(x, y, width, height, levels) {
-    }
-
-    // PRIVATE FUNCTIONS
-    /**
-     * Get vertex shader's glsl code.
-     * @returns {string} vertex shader's glsl code
-     */
-    _getVertexShaderSource() {
-        const vertexShaderSource = `#version 300 es
-precision mediump int;
-precision mediump float;
-
-out vec2 v_texture_coords;
-
-const vec3 viewport[4] = vec3[4] (
-    vec3(-1.0, 1.0, 1.0),
-    vec3(-1.0, -1.0, 1.0),
-    vec3(1.0, 1.0, 1.0),
-    vec3(1.0, -1.0, 1.0)
-);
-
-void main() {
-    v_texture_coords = vec2(viewport[gl_VertexID]) / 2.0 + 0.5;
-    gl_Position = vec4(viewport[gl_VertexID], 1.0);
-}
-`;
-
-        return vertexShaderSource;
-    }
-
-    /**
-     * Get fragment shader's glsl code.
-     * @param {string} definition ShaderLayers' glsl code placed outside the main function
-     * @param {string} execution ShaderLayers' glsl code placed inside the main function
-     * @param {string} globalScopeCode ShaderLayers' glsl code shared between the their instantions
-     * @returns {string} fragment shader's glsl code
-     */
-    _getFragmentShaderSource(definition, execution, globalScopeCode) {
-        const fragmentShaderSource = `#version 300 es
-precision mediump int;
-precision mediump float;
-precision mediump sampler2DArray;
-
-uniform int u_instanceTextureIndexes[${this.textureMappingsUniformSize}];
-uniform int u_instanceOffsets[${this.textureMappingsUniformSize}];
-uniform vec3 u_shaderVariables[${this.textureMappingsUniformSize}];
-
-in vec2 v_texture_coords;
-
-bool stencilPasses;
-int instance_id;
-float opacity;
-float pixelSize;
-float zoom;
-
-uniform sampler2DArray u_inputTextures;
-uniform sampler2DArray u_stencilTextures;
-
-vec4 osd_texture(int index, vec2 coords) {
-    int offset = u_instanceOffsets[instance_id];
-    index = u_instanceTextureIndexes[offset + index];
-    return texture(u_inputTextures, vec3(coords, float(index)));
-}
-
-ivec2 osd_texture_size(int index) {
-    int offset = u_instanceOffsets[instance_id];
-    index = u_instanceTextureIndexes[offset + index];
-    return textureSize(u_inputTextures, index).xy;
-}
-
-// UTILITY function
-bool close(float value, float target) {
-    return abs(target - value) < 0.001;
-}
-
-// BLEND attributes
-out vec4 overall_color;
-vec4 blendAlpha(vec4 fg, vec4 bg, vec3 rgb) {
-    float a = fg.a + bg.a * (1.0 - fg.a);
-    return vec4(rgb, a);
-}
-vec4 blend_source_over(vec4 fg, vec4 bg) {
-    if (!stencilPasses) return bg;
-    vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
-    return pre_fg + bg * (1.0 - pre_fg.a);
-}
-
-// GLOBAL SCOPE CODE:${Object.keys(globalScopeCode).length !== 0 ? Object.values(globalScopeCode).join("\n") : '\n    // No global scope code here...'}
-
-// DEFINITIONS OF SHADERLAYERS:${definition !== '' ? definition : '\n    // Any non-default shaderLayer here to define...'}
-
-void main() {
-    ${execution}
-}`;
-
-        return fragmentShaderSource;
-    }
-};
-
-$.WebGLModule.WebGL20.FirstPassProgram = class extends $.WebGLModule.Program {
-
-    constructor(context, gl) {
-        super(context, gl);
-        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
-        this._textureIndexes = [...Array(this._maxTextures).keys()];
-        // Todo: RN we support only MAX_COLOR_ATTACHMENTS in the texture array, which varies beetween devices
-        //   make the first pass shader run multiple times if the number does not suffice
-        this._maxAttachments = gl.getParameter(gl.MAX_COLOR_ATTACHMENTS);
-    }
-
-    build(shaderMap, shaderKeys) {
-        this.vertexShader = `#version 300 es
-precision mediump int;
-precision mediump float;
-
-layout(location = 0) in mat3 a_transform_matrix;
-layout(location = 4) in vec2 a_texture_coords;
-
-uniform vec2 u_renderClippingParams;
-
-out vec2 v_texture_coords;
-flat out int instance_id;
-
-const vec3 viewport[4] = vec3[4] (
-    vec3(0.0, 1.0, 1.0),
-    vec3(0.0, 0.0, 1.0),
-    vec3(1.0, 1.0, 1.0),
-    vec3(1.0, 0.0, 1.0)
-);
-
-in vec2 a_positions;
-
-void main() {
-    v_texture_coords = a_texture_coords;
-
-    vec3 space_2d = u_renderClippingParams.x > 0.5 ?
-        a_transform_matrix * vec3(a_positions, 1.0) :
-        a_transform_matrix * viewport[gl_VertexID];
-
-    gl_Position = vec4(space_2d.xy, 1.0, space_2d.z);
-    instance_id = gl_InstanceID;
-}
-`;
-        this.fragmentShader = `#version 300 es
-precision mediump int;
-precision mediump float;
-precision mediump sampler2D;
-
-uniform vec2 u_renderClippingParams;
-
-flat in int instance_id;
-in vec2 v_texture_coords;
-uniform sampler2D u_textures[${this._maxTextures}];
-
-layout(location=0) out vec4 outputColor;
-layout(location=1) out float outputStencil;
-
-void main() {
-    if (u_renderClippingParams.x < 0.5) {
-        // Iterate over tiles - textures for each tile (a texture array)
-        for (int i = 0; i < ${this._maxTextures}; i++) {
-            // Iterate over data in each tile if the index matches our tile
-            if (i == instance_id) {
-                 switch (i) {
-    ${this.printN(x => `case ${x}: outputColor = texture(u_textures[${x}], v_texture_coords); break;`,
-                this._maxTextures, "                ")}
-                 }
-                 break;
-            }
-        }
-        outputStencil = 1.0;
-    }
-}
-`;
-    }
-
-    created(width, height) {
-        const gl = this.gl;
-        const program = this.webGLProgram;
-
-        // Texture creation happens on setDimensions, called later
-
-        let vao = this.firstPassVao;
-        if (!vao) {
-            this.offScreenBuffer = gl.createFramebuffer();
-
-            this.firstPassVao = vao = gl.createVertexArray();
-            this.matrixBuffer = gl.createBuffer();
-            this.texCoordsBuffer = gl.createBuffer();
-
-            this.matrixBufferClip = gl.createBuffer();
-            this.firstPassVaoClip = gl.createVertexArray();
-            this.positionsBufferClip = gl.createBuffer();
-        }
-
-        // Texture locations are 0->N uniform indexes, we do not load the data here yet as vao does not store them
-        this._inputTexturesLoc = gl.getUniformLocation(program, "u_textures");
-        this._renderClipping = gl.getUniformLocation(program, "u_renderClippingParams");
-
-        // Setup all rendering props once beforehand
-        gl.bindVertexArray(vao);
-        // Texture coords are vec2 * 4 coords for the textures, needs to be passed since textures can have offset
-        this._texCoordsBuffer = gl.getAttribLocation(program, "a_texture_coords");
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
-        gl.enableVertexAttribArray(this._texCoordsBuffer);
-        gl.vertexAttribPointer(this._texCoordsBuffer, 2, gl.FLOAT, false, 0, 0);
-        gl.vertexAttribDivisor(this._texCoordsBuffer, 0);
-
-        // We call bufferData once, then we just call subData
-        const maxTexCoordBytes = this._maxTextures * 8 * Float32Array.BYTES_PER_ELEMENT;
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, maxTexCoordBytes, gl.DYNAMIC_DRAW);
-
-        // To be able to use the clipping along with tile render, we pass points explicitly
-        this._positionsBuffer = gl.getAttribLocation(program, "a_positions");
-
-        // Matrices position tiles, 3*3 matrix per tile sent as 3 attributes in
-        this._matrixBuffer = gl.getAttribLocation(program, "a_transform_matrix");
-        const matLoc = this._matrixBuffer;
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
-        gl.enableVertexAttribArray(matLoc);
-        gl.enableVertexAttribArray(matLoc + 1);
-        gl.enableVertexAttribArray(matLoc + 2);
-        gl.vertexAttribPointer(matLoc, 3, gl.FLOAT, false, 9 * Float32Array.BYTES_PER_ELEMENT, 0);
-        gl.vertexAttribPointer(matLoc + 1, 3, gl.FLOAT, false, 9 * Float32Array.BYTES_PER_ELEMENT, 3 * Float32Array.BYTES_PER_ELEMENT);
-        gl.vertexAttribPointer(matLoc + 2, 3, gl.FLOAT, false, 9 * Float32Array.BYTES_PER_ELEMENT, 6 * Float32Array.BYTES_PER_ELEMENT);
-        gl.vertexAttribDivisor(matLoc, 1);
-        gl.vertexAttribDivisor(matLoc + 1, 1);
-        gl.vertexAttribDivisor(matLoc + 2, 1);
-        // We call bufferData once, then we just call subData
-        const maxMatrixBytes = this._maxTextures * 9 * Float32Array.BYTES_PER_ELEMENT;
-        gl.bufferData(gl.ARRAY_BUFFER, maxMatrixBytes, gl.STREAM_DRAW);
-
-
-        // Clipping stage
-        vao = this.firstPassVaoClip;
-        gl.bindVertexArray(vao);
-        // We don't care about texture and we re-use the positions, we discard this data
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionsBufferClip);  // we really need positionsBufferClip here!
-        gl.enableVertexAttribArray(this._texCoordsBuffer);
-        gl.vertexAttribPointer(this._texCoordsBuffer, 2, gl.FLOAT, false, 0, 0);
-        // To be able to use the clipping along with tile render, we pass points explicitly
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionsBufferClip);
-        gl.enableVertexAttribArray(this._positionsBuffer);
-        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
-        // We use static matrix
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBufferClip);
-        gl.enableVertexAttribArray(matLoc);
-        gl.enableVertexAttribArray(matLoc + 1);
-        gl.enableVertexAttribArray(matLoc + 2);
-        gl.vertexAttribPointer(matLoc, 3, gl.FLOAT, false, 9 * Float32Array.BYTES_PER_ELEMENT, 0);
-        gl.vertexAttribPointer(matLoc + 1, 3, gl.FLOAT, false, 9 * Float32Array.BYTES_PER_ELEMENT, 3 * Float32Array.BYTES_PER_ELEMENT);
-        gl.vertexAttribPointer(matLoc + 2, 3, gl.FLOAT, false, 9 * Float32Array.BYTES_PER_ELEMENT, 6 * Float32Array.BYTES_PER_ELEMENT);
-        gl.vertexAttribDivisor(matLoc, 1);
-        gl.vertexAttribDivisor(matLoc + 1, 1);
-        gl.vertexAttribDivisor(matLoc + 2, 1);
-        gl.bufferData(gl.ARRAY_BUFFER, maxMatrixBytes, gl.STREAM_DRAW);
-
-        // Good practice
-        gl.bindVertexArray(null);
-    }
-
-    /**
-     * Load program. No arguments.
-     */
-    load() {
-        this.gl.uniform1iv(this._inputTexturesLoc, this._textureIndexes);
-        this.gl.disable(this.gl.BLEND);
-    }
-
-    /**
-     * Use program. Arbitrary arguments.
-     * @param {FPRenderPackage[]} sourceArray
-     */
-    use(sourceArray) {
-        const gl = this.gl;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
-        gl.enable(gl.STENCIL_TEST);
-        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, this.stencilClipBuffer);
-
-        // this.fpTexture = this.fpTexture === this.colorTextureA ? this.colorTextureB : this.colorTextureA;
-        // this.fpTextureClip = this.fpTextureClip === this.stencilTextureA ? this.stencilTextureB : this.stencilTextureA;
-        this.fpTexture = this.colorTextureA;
-        this.fpTextureClip = this.stencilTextureA;
-
-        this._renderOffset = 0;
-
-        // Allocate reusable buffers once
-        if (!this._tempMatrixData) {
-            this._tempMatrixData = new Float32Array(this._maxTextures * 9);
-            this._tempTexCoords = new Float32Array(this._maxTextures * 8);
-        }
-        let wasClipping = true; // force first init (~ as if was clipping was true)
-
-        for (const renderInfo of sourceArray) {
-            const source = renderInfo.tiles;
-            const attachments = [];
-            // for (let i = 0; i < 1; i++) {
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
-                    this.fpTexture, 0, this._renderOffset);
-                attachments.push(gl.COLOR_ATTACHMENT0);
-
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + 1,
-                    this.fpTextureClip, 0, this._renderOffset);
-                attachments.push(gl.COLOR_ATTACHMENT0 + 1);
-            //}
-            gl.drawBuffers(attachments);
-            gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-
-            // First, clip polygons if any required
-            if (renderInfo.polygons.length) {
-                gl.stencilFunc(gl.ALWAYS, 1, 0xFF);
-                gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
-
-                // Note: second param unused for now...
-                gl.uniform2f(this._renderClipping, 1, 0);
-                gl.bindVertexArray(this.firstPassVaoClip);
-
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBufferClip);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(renderInfo._temp.values));
-
-                for (const polygon of renderInfo.polygons) {
-                    gl.bindBuffer(gl.ARRAY_BUFFER, this.positionsBufferClip);
-                    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(polygon), gl.STATIC_DRAW);
-                    gl.drawArrays(gl.TRIANGLE_FAN, 0, polygon.length / 2);
-                }
-
-                gl.stencilFunc(gl.EQUAL, renderInfo.polygons.length, 0xFF);
-                gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-                // Note: second param unused for now...
-                gl.uniform2f(this._renderClipping, 0, 0);
-                wasClipping = true;
-
-            } else if (wasClipping) {
-                gl.uniform2f(this._renderClipping, 0, 0);
-                gl.stencilFunc(gl.EQUAL, 0, 0xFF);
-                wasClipping = false;
-            }
-
-            // Then draw join tiles
-            gl.bindVertexArray(this.firstPassVao);
-            const tileCount = source.length;
-            let currentIndex = 0;
-
-            while (currentIndex < tileCount) {
-                const batchSize = Math.min(this._maxTextures, tileCount - currentIndex);
-
-                for (let i = 0; i < batchSize; i++) {
-                    const tile = source[currentIndex + i];
-
-                    gl.activeTexture(gl.TEXTURE0 + i);
-                    gl.bindTexture(gl.TEXTURE_2D, tile.texture);
-
-                    this._tempMatrixData.set(tile.transformMatrix, i * 9);
-                    this._tempTexCoords.set(tile.position, i * 8);
-                }
-
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempTexCoords.subarray(0, batchSize * 8));
-
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempMatrixData.subarray(0, batchSize * 9));
-
-                gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, batchSize);
-                currentIndex += batchSize;
-            }
-
-            this._renderOffset++;
-        }
-
-        gl.disable(gl.STENCIL_TEST);
-        gl.bindVertexArray(null);
-
-        return {
-            texture: this.fpTexture,
-            stencil: this.fpTextureClip
-        };
-    }
-
-    unload() {
-    }
-
-    setDimensions(x, y, width, height, dataLayerCount) {
-        // Double swapping required else collisions
-        this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR);
-        this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
-
-        this._createOffscreenTexture("stencilTextureA", width, height, dataLayerCount, this.gl.LINEAR);
-        this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
-
-        const gl  = this.gl;
-        if (this.stencilClipBuffer) {
-            gl.deleteRenderbuffer(this.stencilClipBuffer);
-        }
-        this.stencilClipBuffer = gl.createRenderbuffer();
-        gl.bindRenderbuffer(gl.RENDERBUFFER, this.stencilClipBuffer);
-        gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH24_STENCIL8, width, height);
-    }
-
-
-    /**
-     * Destroy program. No arguments.
-     */
-    destroy() {
-        // todo calls here might be frequent due to initialization... try to optimize, e.g. soft delete
-        const gl = this.gl;
-        gl.deleteFramebuffer(this.offScreenBuffer);
-        this.offScreenBuffer = null;
-        gl.deleteTexture(this.colorTextureA);
-        this.colorTextureA = null;
-        gl.deleteTexture(this.stencilTextureA);
-        this.stencilTextureA = null;
-        gl.deleteTexture(this.colorTextureB);
-        this.colorTextureB = null;
-        gl.deleteTexture(this.stencilTextureB);
-        this.stencilTextureB = null;
-
-        gl.deleteBuffer(gl.createRenderbuffer());
-        this.stencilClipBuffer = null;
-
-        gl.deleteVertexArray(this.firstPassVao);
-        gl.deleteBuffer(this.matrixBuffer);
-        gl.deleteBuffer(this.texCoordsBuffer);
-        this.matrixBuffer = null;
-        this.firstPassVao = null;
-        this.texCoordsBuffer = null;
-
-        this.firstPassVaoClip = gl.createVertexArray();
-        gl.deleteVertexArray(this.firstPassVaoClip);
-        // gl.deleteBuffer(this.positionsBuffer);
-        // this.positionsBuffer = null;
-        gl.deleteBuffer(this.matrixBufferClip);
-        this.matrixBufferClip = null;
-        gl.deleteBuffer(this.positionsBufferClip);
-        this.positionsBufferClip = null;
-    }
-
-    _createOffscreenTexture(name, width, height, layerCount, filter) {
-        layerCount = Math.max(layerCount, 1);
-        const gl = this.gl;
-
-        let texRef = this[name];
-        if (texRef) {
-            gl.deleteTexture(texRef);
-        }
-
-        this[name] = texRef = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, texRef);
-        gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, width, height, layerCount);
-        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, filter);
-        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, filter);
-        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    }
-};
-})(OpenSeadragon);
-
-(function( $ ){
-    const OpenSeadragon = $;
-
-    /**
-     * @typedef {Object} TiledImageInfo
-     * @property {Number} TiledImageInfo.id
-     * @property {Number[]} TiledImageInfo.shaderOrder
-     * @property {Object} TiledImageInfo.shaders
-     * @property {Object} TiledImageInfo.drawers
-     */
-
-    /**
-     * @property {Number} idGenerator unique ID getter
-     *
-     * @class OpenSeadragon.WebGLDrawerModular
-     * @classdesc implementation of WebGL renderer for an {@link OpenSeadragon.Viewer}
-     */
-    OpenSeadragon.WebGLDrawerModular = class extends OpenSeadragon.DrawerBase {
-        /**
-         * @param {Object} options options for this Drawer
-         * @param {OpenSeadragon.Viewer} options.viewer the Viewer that owns this Drawer
-         * @param {OpenSeadragon.Viewport} options.viewport reference to Viewer viewport
-         * @param {HTMLElement} options.element parent element
-         * @param {[String]} options.debugGridColor see debugGridColor in {@link OpenSeadragon.Options} for details
-         * @param {Object} options.options optional
-         *
-         * @constructor
-         * @memberof OpenSeadragon.WebGLDrawerModular
-         */
-        constructor(options){
-            super(options);
-
-            this._destroyed = false;
-            this._backupCanvasDrawer = null;
-            this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
-            this._configuredExternally = false;
-            this._supportedFormats = ["blob", "context2d", "image"];
-
-            // Create a link for downloading off-screen textures, or input image data tiles. Only for the main drawer, not the minimap.
-            // Generated with ChatGPT, customized.
-            if (this._id === 0 && this.debug) {
-                const canvas = document.createElement("canvas");
-                canvas.id = 'download-off-screen-textures';
-                canvas.href = '#';  // make it a clickable link
-                canvas.textContent = 'Download off-screen textures';
-
-                const element = document.getElementById(this.options.debugInfoContainer); // todo dirty
-                if (!element) {
-                    console.warn('Element with id "panel-shaders" not found, appending download link for off-screen textures to body.');
-                    document.body.appendChild(canvas);
-                    canvas.style.position = 'absolute';
-                    canvas.style.top = '0px';
-
-                } else {
-                    element.appendChild(canvas);
-                }
-                canvas.style.width = '250px';
-                canvas.style.height = '250px';
-                this._debugCanvas = canvas; //todo dirty
-                this._extractionFB =  this.renderer.gl.createFramebuffer();
-                this._debugIntermediate = document.createElement("canvas");
-
-            }
-
-            // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
-            this.viewer.rejectEventHandler("tile-drawn", "The WebGLDrawer does not raise the tile-drawn event");
-            this.viewer.rejectEventHandler("tile-drawing", "The WebGLDrawer does not raise the tile-drawing event");
-            this.viewer.world.addHandler("remove-item", (e) => {
-                const tiledImage = e.item;
-                // if managed internally on the instance (regardless of renderer state), handle removal
-                if (tiledImage.__shaderConfig) {
-                    this.renderer.removeShader(tiledImage.__shaderConfig.id);
-                    delete tiledImage.__shaderConfig;
-                    if (tiledImage.__wglCompositeHandler) {
-                        tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
-                    }
-                }
-                // if now managed externally, just request rebuild, also updates order
-                if (!this._configuredExternally) {
-                    // Update keys
-                    this._requestRebuild();
-                }
-            });
-        } // end of constructor
-
-        /**
-         * Drawer type.
-         * @returns {String}
-         */
-        getType() {
-            return 'modular-webgl';
-        }
-
-        getSupportedDataFormats() {
-            return this._supportedFormats;
-        }
-
-        getRequiredDataFormats() {
-            return this._supportedFormats;
-        }
-
-        get defaultOptions() {
-            return {
-                usePrivateCache: true,
-                preloadCache: true,
-                copyShaderConfig: false,
-                debugInfoContainer: undefined
-            };
-        }
-
-        /**
-         * todo docs
-         *
-         * todo use in xopat instead of configuration
-         * @param shaders
-         * @param shaderOrder
-         */
-        setRenderingConfig(shaders, shaderOrder = undefined) {
-            // todo reset also when reordering tiled images!
-            // or we could change order only
-
-            const willBeConfigured = !!shaders;
-            if (!willBeConfigured) {
-                if (this._configuredExternally) {
-                    this._configuredExternally = false;
-                    // If we changed render style, recompile everything
-                    this.renderer.deleteShaders();
-                    this.viewer.world._items.map(item => this.tiledImageCreated(item).id);
-                }
-                return;
-            }
-
-            // If custom rendering used, use arbitrary external configuration
-            this._configuredExternally = true;
-            this.renderer.deleteShaders();
-            for (let shaderID in shaders) {
-                let config = shaders[shaderID];
-                this.setRenderingConfigShader(shaderID, config);
-            }
-            shaderOrder = shaderOrder || Object.keys(shaders);
-            this.renderer.setShaderLayerOrder(shaderOrder);
-            this._requestRebuild();
-        }
-
-        /**
-         * If shaders are managed internally, tiled image can be configured a single custom
-         * shader if desired. This shader is ignored if setRenderingConfig({...}) used.
-         * @param tiledImage
-         * @param shader
-         */
-        configureTiledImage(tiledImage, shader) {
-            shader.id = shader.id || this.constructor.idGenerator;
-            tiledImage.__shaderConfig = shader;
-
-            // if already configured, request re-configuration
-            if (tiledImage.__wglCompositeHandler) {
-                this.tiledImageCreated(tiledImage);
-            }
-            return shader;
-        }
-
-        /**
-         * Retrieve shader config by its key. Shader IDs are known only
-         * when setRenderingConfig() called
-         * @param key
-         * @return {ShaderConfig|*|undefined}
-         */
-        getRenderingConfig(key) {
-            const shaderLayer = this.renderer.getAllShaders()[key];
-            return shaderLayer ? shaderLayer.getConfig() : undefined;
-        }
-
-        // todo better names
-        setRenderingConfigShader(key, config) {
-            const defaultConfig = {
-                id: this.constructor.idGenerator,
-                name: "Layer",
-                type: "identity",
-                visible: 1,
-                fixed: false,
-                tiledImages: [0],
-                params: {},
-                cache: {},
-            };
-            if (this.options.copyShaderConfig) {
-                // Deep copy to avoid modification propagation
-                config = $.extend(true, defaultConfig, config);
-            } else {
-                // Ensure we keep references where possible -> this will make shader object within drawers (e.g. navigator VS main)
-                for (let propName in defaultConfig) {
-                    if (config[propName] === undefined) {
-                        config[propName] = defaultConfig[propName];
-                    }
-                }
-            }
-            config._renderContext = this.renderer.createShaderLayer(key, config);
-        }
-
-        /**
-         * Register TiledImage into the system.
-         * @param {OpenSeadragon.TiledImage} tiledImage
-         * @return {ShaderConfig|null}
-         */
-        tiledImageCreated(tiledImage) {
-            // Always attempt to clean up
-            if (tiledImage.__wglCompositeHandler) {
-                tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
-            }
-
-            // If we configure externally the renderer, simply bypass
-            if (this._configuredExternally) {
-                // __shaderConfig reference is kept only when managed internally, can keep custom shader config for particular tiled image
-                delete tiledImage.__shaderConfig;
-                this._requestRebuild();
-                return null;
-            }
-
-            let config = tiledImage.__shaderConfig;
-            if (!config) {
-                config = tiledImage.__shaderConfig = {
-                    name: "Identity shader",
-                    type: "identity",
-                    visible: 1,
-                    fixed: false,
-                    params: {},
-                    cache: {},
-                };
-            }
-
-            if (!config.id) {
-                config.id = this.constructor.idGenerator;
-            }
-
-            const shaderId = config.id;
-
-            // When this._configuredExternally == false, the index is always self index, deduced dynamically
-            const property = Object.getOwnPropertyDescriptor(config, 'tiledImages');
-            if (!property || property.configurable) {
-                delete config.tiledImages;
-
-                // todo make custom renderer pass tiledImages as array of tiled images -> will deduce easily
-                Object.defineProperty(config, "tiledImages", {
-                    get: () => [this.viewer.world.getIndexOfItem(tiledImage)]
-                });
-            } // else already set as a getter
-
-
-            if (!config.params.use_blend && tiledImage.compositeOperation) {
-                // eslint-disable-next-line camelcase
-                config.params.use_mode = 'mask';
-                // eslint-disable-next-line camelcase
-                config.params.use_blend = tiledImage.compositeOperation;
-            }
-
-            const shader = this.renderer.createShaderLayer(shaderId, config);
-            config._renderContext = shader;
-
-            tiledImage.__wglCompositeHandler = e => {
-                // todo consider just removing 'show' and using 'mask' by default with correct blending
-
-                const config = shader.getConfig();
-
-                // eslint-disable-next-line camelcase
-                config.params.use_blend = tiledImage.compositeOperation;
-                // eslint-disable-next-line camelcase
-                config.params.use_mode = 'mask';
-                shader.resetMode(config.params, false);
-                this._requestRebuild(0);
-            };
-
-            tiledImage.addHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
-            this._requestRebuild();
-            return config;
-        }
-
-        /**
-         * Clean up the WebGLDrawerModular, removing all resources.
-         */
-        destroy() {
-            if (this._destroyed) {
-                return;
-            }
-            const gl = this._gl;
-
-
-            // clean all texture units; adapted from https://stackoverflow.com/a/23606581/1214731
-            var numTextureUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
-            for (let unit = 0; unit < numTextureUnits; ++unit) {
-                gl.activeTexture(gl.TEXTURE0 + unit);
-                gl.bindTexture(gl.TEXTURE_2D, null);
-
-                if (this.webGLVersion === "2.0") {
-                    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
-                }
-            }
-            gl.bindBuffer(gl.ARRAY_BUFFER, null);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-
-            // this._outputCanvas.width = this._outputCanvas.height = 1;
-            // this._renderingCanvas.width = this._renderingCanvas.height = 1;
-            // this._outputCanvas = this._outputContext = null;
-
-            // this._renderingCanvas = null;
-            let ext = gl.getExtension('WEBGL_lose_context');
-            if (ext) {
-                ext.loseContext();
-            }
-            // set our webgl context reference to null to enable garbage collection
-            this._gl = null;
-
-            gl.deleteFramebuffer(this._extractionFB);
-            // unbind our event listeners from the viewer
-            this.viewer.removeHandler("resize", this._resizeHandler);
-
-            if (this._backupCanvasDrawer){
-                this._backupCanvasDrawer.destroy();
-                this._backupCanvasDrawer = null;
-            }
-
-            this.container.removeChild(this.canvas);
-            if (this.viewer.drawer === this){
-                this.viewer.drawer = null;
-            }
-
-            // set our destroyed flag to true
-            this._destroyed = true;
-        }
-
-        _hasInvalidBuildState() {
-            return this._requestBuildStamp > this._buildStamp;
-        }
-
-        _requestRebuild(timeout = 30, force = false) {
-            this._requestBuildStamp = Date.now();
-            if (this._rebuildHandle) {
-                if (!force) {
-                    return;
-                }
-                clearTimeout(this._rebuildHandle);
-            }
-            this._rebuildHandle = setTimeout(() => {
-                if (!this._configuredExternally) {
-                    this.renderer.setShaderLayerOrder(this.viewer.world._items.map(item =>
-                        item.__shaderConfig.id));
-                }
-                this._buildStamp = Date.now();
-
-                //todo internals touching
-                this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this.viewer.world.getItemCount());
-                // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
-                this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
-                this._rebuildHandle = null;
-                setTimeout(() => {
-                    this.viewer.world.needsDraw();
-                });
-            }, timeout);
-        }
-
-        /**
-         * Initial setup of all three canvases used (output, rendering) and their contexts (2d, 2d, webgl)
-         */
-        _setupCanvases() {
-            // this._outputCanvas = this.canvas; //canvas on screen
-            // this._outputContext = this._outputCanvas.getContext('2d');
-
-            // this._renderingCanvas = this.renderer.canvas; //canvas for webgl
-
-            // this._renderingCanvas.width = this._outputCanvas.width;
-            // this._renderingCanvas.height = this._outputCanvas.height;
-
-            this._resizeHandler = () => {
-                // if(this._outputCanvas !== this.viewer.drawer.canvas) {
-                //     this._outputCanvas.style.width = this.viewer.drawer.canvas.clientWidth + 'px';
-                //     this._outputCanvas.style.height = this.viewer.drawer.canvas.clientHeight + 'px';
-                // }
-
-                let viewportSize = this._calculateCanvasSize();
-                if (this.debug) {
-                    console.info('Resize event, newWidth, newHeight:', viewportSize.x, viewportSize.y);
-                }
-
-                // if( this._outputCanvas.width !== viewportSize.x ||
-                //     this._outputCanvas.height !== viewportSize.y ) {
-                //     this._outputCanvas.width = viewportSize.x;
-                //     this._outputCanvas.height = viewportSize.y;
-                // }
-
-                // todo necessary?
-                // this._renderingCanvas.style.width = this._outputCanvas.clientWidth + 'px';
-                // this._renderingCanvas.style.height = this._outputCanvas.clientHeight + 'px';
-                // this._renderingCanvas.width = this._outputCanvas.width;
-                // this._renderingCanvas.height = this._outputCanvas.height;
-
-                this.renderer.setDimensions(0, 0, viewportSize.x, viewportSize.y, this.viewer.world.getItemCount());
-                this._size = viewportSize;
-            };
-            this.viewer.addHandler("resize", this._resizeHandler);
-        }
-
-        // DRAWING METHODS
-        /**
-         * Draw using WebGLModule.
-         * @param {[TiledImage]} tiledImages array of TiledImage objects to draw
-         */
-        draw(tiledImages) {
-            // If we did not rebuild yet, avoid rendering - invalid program
-            if (this._hasInvalidBuildState()) {
-                this.viewer.world.needsDraw(); //todo maybe force rebuild now and continue?
-                return;
-            }
-            const gl = this._gl;
-
-            // clear the output canvas
-            // this._outputContext.clearRect(0, 0, this._outputCanvas.width, this._outputCanvas.height);
-
-            // nothing to draw
-            if (tiledImages.every(tiledImage => tiledImage.getOpacity() === 0 || tiledImage.getTilesToDraw().length === 0)) {
-                // todo internal, maybe run second pass with empty once
-                this.renderer.gl.clear(gl.COLOR_BUFFER_BIT);
-                return;
-            }
-
-            const bounds = this.viewport.getBoundsNoRotateWithMargins(true);
-            let view = {
-                bounds: bounds,
-                center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-                rotation: this.viewport.getRotation(true) * Math.PI / 180,
-                zoom: this.viewport.getZoom(true)
-            };
-
-            // TODO consider sending data and computing on GPU
-            // calculate view matrix for viewer
-            let flipMultiplier = this.viewport.flipped ? -1 : 1;
-            let posMatrix = $.Mat3.makeTranslation(-view.center.x, -view.center.y);
-            let scaleMatrix = $.Mat3.makeScaling(2 / view.bounds.width * flipMultiplier, -2 / view.bounds.height);
-            let rotMatrix = $.Mat3.makeRotation(-view.rotation);
-            let viewMatrix = scaleMatrix.multiply(rotMatrix).multiply(posMatrix);
-            this._drawTwoPass(tiledImages, view, viewMatrix);
-        } // end of function
-
-        /**
-         * During the first-pass draw all tiles' data sources into the corresponding off-screen textures using identity rendering,
-         * excluding any image-processing operations or any rendering customizations.
-         * During the second-pass draw from the off-screen textures into the rendering canvas,
-         * applying the image-processing operations and rendering customizations.
-         * @param {OpenSeadragon.TiledImage[]} tiledImages array of TiledImage objects to draw
-         * @param {Object} viewport has bounds, center, rotation, zoom
-         * @param {OpenSeadragon.Mat3} viewMatrix
-         */
-        _drawTwoPass(tiledImages, viewport, viewMatrix) {
-            const gl = this._gl;
-            let firstPassOutput = {};
-
-            // FIRST PASS (render things as they are into the corresponding off-screen textures)
-
-            const TI_PAYLOAD = [];
-            for (let tiledImageIndex = 0; tiledImageIndex < tiledImages.length; tiledImageIndex++) {
-                const tiledImage = tiledImages[tiledImageIndex];
-                const payload = [];
-
-
-                const tilesToDraw = tiledImage.getTilesToDraw();
-                //todo this should be enabled
-                // if (tilesToDraw.length === 0 || tiledImage.getOpacity() === 0) {
-                //     skippedTiledImages[tiledImageIndex] = true;
-                //     continue;
-                // }
-
-                if (tiledImage.placeholderFillStyle && tiledImage._hasOpaqueTile === false) {
-                    this._drawPlaceholder(tiledImage);
-                }
-
-                let overallMatrix = viewMatrix;
-                let imageRotation = tiledImage.getRotation(true);
-                // if needed, handle the tiledImage being rotated
-
-                // todo consider in-place multiplication, this creates insane amout of arrays
-                if( imageRotation % 360 !== 0) {
-                    let imageRotationMatrix = $.Mat3.makeRotation(-imageRotation * Math.PI / 180);
-                    let imageCenter = tiledImage.getBoundsNoRotate(true).getCenter();
-                    let t1 = $.Mat3.makeTranslation(imageCenter.x, imageCenter.y);
-                    let t2 = $.Mat3.makeTranslation(-imageCenter.x, -imageCenter.y);
-
-                    // update the view matrix to account for this image's rotation
-                    let localMatrix = t1.multiply(imageRotationMatrix).multiply(t2);
-                    overallMatrix = viewMatrix.multiply(localMatrix);
-                }
-
-                for (let tileIndex = 0; tileIndex < tilesToDraw.length; ++tileIndex) {
-                    const tile = tilesToDraw[tileIndex].tile;
-
-                    const tileInfo = this.getDataToDraw(tile);
-                    if (!tileInfo) {
-                        //TODO consider drawing some error if the tile is in erroneous state
-                        continue;
-                    }
-                    payload.push({
-                        transformMatrix: this._updateTileMatrix(tileInfo, tile, tiledImage, overallMatrix),
-                        dataIndex: tiledImageIndex,
-                        texture: tileInfo.texture,
-                        position: tileInfo.position,
-                        tile: tile
-                    });
-                }
-
-                let polygons;
-
-                //TODO: osd could cache this.getBoundsNoRotate(current) which might be fired many times in rendering (possibly also other parts)
-                if (tiledImage._croppingPolygons) {
-                    polygons = tiledImage._croppingPolygons.map(polygon => polygon.flatMap(coord => {
-                        let point = tiledImage.imageToViewportCoordinates(coord.x, coord.y, true);
-                        return [point.x, point.y];
-                    }));
-                } else {
-                    polygons = [];
-                }
-                if (tiledImage._clip) {
-                    const polygon = [
-                        {x: tiledImage._clip.x, y: tiledImage._clip.y},
-                        {x: tiledImage._clip.x + tiledImage._clip.width, y: tiledImage._clip.y},
-                        {x: tiledImage._clip.x + tiledImage._clip.width, y: tiledImage._clip.y + tiledImage._clip.height},
-                        {x: tiledImage._clip.x, y: tiledImage._clip.y + tiledImage._clip.height},
-                    ];
-                    polygons.push(polygon.flatMap(coord => {
-                        let point = tiledImage.imageToViewportCoordinates(coord.x, coord.y, true);
-                        return [point.x, point.y];
-                    }));
-                }
-
-                TI_PAYLOAD.push({
-                    tiles: payload,
-                    polygons: polygons,
-                    dataIndex: tiledImageIndex,
-                    _temp: overallMatrix, // todo dirty
-                });
-            }
-
-            // todo flatten render data
-            firstPassOutput = this.renderer.firstPassProcessData(TI_PAYLOAD);
-
-            // // DEBUG; export the off-screen textures as canvases  TODO some more elegant view
-            // if (this.debug) {
-            //     // wait for the GPU to finish rendering into the off-screen textures
-            //     gl.finish();
-            //
-            //     this._extractOffScreenTexture(firstPassOutput, this.viewer.world.getItemCount());
-            // }
-
-            const sources = [];
-            const shaders = this.renderer.getAllShaders();
-
-            for (let shaderID of this.renderer.getShaderLayerOrder()) {
-                const shader = shaders[shaderID];
-                const config = shader.getConfig();
-
-                // Here we could do some nicer logics, RN we just treat TI0 as a source of truth
-                const tiledImage = this.viewer.world.getItemAt(config.tiledImages[0]);
-                sources.push({
-                    zoom: viewport.zoom,
-                    pixelSize: this._tiledImageViewportToImageZoom(tiledImage, viewport.zoom),
-                    opacity: tiledImage.getOpacity(),
-                    shader: shader
-                });
-            }
-
-            if (!sources.length) {
-                this.viewer.world.needsDraw();
-                return;
-            }
-
-            this.renderer.secondPassProcessData(firstPassOutput, sources);
-            // flag that the data needs to be put to the output canvas and that the rendering canvas needs to be cleared
-            this._renderingCanvasHasImageData = true;
-            gl.finish();
-        } // end of function
-
-        _getTileRenderMeta(tile, tiledImage) {
-            let result = tile._renderStruct;
-            if (result) {
-                return result;
-            }
-
-            // Overlap fraction of tile if set
-            let overlap = tiledImage.source.tileOverlap;
-            if (overlap > 0) {
-                let nativeWidth = tile.sourceBounds.width; // in pixels
-                let nativeHeight = tile.sourceBounds.height; // in pixels
-                let overlapWidth  = (tile.x === 0 ? 0 : overlap) + (tile.isRightMost ? 0 : overlap); // in pixels
-                let overlapHeight = (tile.y === 0 ? 0 : overlap) + (tile.isBottomMost ? 0 : overlap); // in pixels
-                let widthOverlapFraction = overlap / (nativeWidth + overlapWidth); // as a fraction of image including overlap
-                let heightOverlapFraction = overlap / (nativeHeight + overlapHeight); // as a fraction of image including overlap
-                tile._renderStruct = result = {
-                    overlapX: widthOverlapFraction,
-                    overlapY: heightOverlapFraction
-                };
-            } else {
-                tile._renderStruct = result = {
-                    overlapX: 0,
-                    overlapY: 0
-                };
-            }
-
-            return result;
-        }
-
-        /**
-         * Get transform matrix that will be applied to tile.
-         */
-        _updateTileMatrix(tileInfo, tile, tiledImage, viewMatrix){
-            let tileMeta = this._getTileRenderMeta(tile, tiledImage);
-            let xOffset = tile.positionedBounds.width * tileMeta.overlapX;
-            let yOffset = tile.positionedBounds.height * tileMeta.overlapY;
-
-            let x = tile.positionedBounds.x + (tile.x === 0 ? 0 : xOffset);
-            let y = tile.positionedBounds.y + (tile.y === 0 ? 0 : yOffset);
-            let right = tile.positionedBounds.x + tile.positionedBounds.width - (tile.isRightMost ? 0 : xOffset);
-            let bottom = tile.positionedBounds.y + tile.positionedBounds.height - (tile.isBottomMost ? 0 : yOffset);
-
-            const model = new $.Mat3([
-                right - x, 0, 0, // sx = width
-                0, bottom - y, 0, // sy = height
-                x, y, 1
-            ]);
-
-            if (tile.flipped) {
-                // For documentation:
-                // // - flips the tile so that we see it's back
-                // const flipLeftAroundTileOrigin = $.Mat3.makeScaling(-1, 1);
-                // //  tile's geometry stays the same so when looking at it's back we gotta reverse the logic we would normally use
-                // const moveRightAfterScaling = $.Mat3.makeTranslation(-1, 0);
-                // matrix = matrix.multiply(flipLeftAroundTileOrigin).multiply(moveRightAfterScaling);
-
-                //Optimized:
-                model.scaleAndTranslateSelf(-1, 1, 1, 0);
-            }
-
-            model.scaleAndTranslateOtherSetSelf(viewMatrix);
-            return model.values;
-        }
-
-        /**
-         * Get pixel size value.
-         */
-        _tiledImageViewportToImageZoom(tiledImage, viewportZoom) {
-            var ratio = tiledImage._scaleSpring.current.value *
-                tiledImage.viewport._containerInnerSize.x /
-                tiledImage.source.dimensions.x;
-            return ratio * viewportZoom;
-        }
-
-        /**
-         * Extract texture data into the canvas in this.offScreenTexturesAsCanvases[index] for debugging purposes.
-         * @returns
-         */
-        // Generated with ChatGPT, customized.
-        _extractOffScreenTexture(fpOutput, length) {
-            let dx = 0;
-            if (!this._debugCanvas) {
-                return;
-            }
-            const gl = this._gl;
-            const width = this._size.x;
-            const height = this._size.y;
-
-            // create a temporary framebuffer to read from the texture layer
-            gl.bindFramebuffer(gl.FRAMEBUFFER, this._extractionFB);
-            this._debugCanvas.width = width;
-            this._debugCanvas.height = height;
-            this._debugIntermediate.width = width;
-            this._debugIntermediate.height = height;
-
-            const ctx = this._debugCanvas.getContext('2d');
-            const contextIntermediate = this._debugIntermediate.getContext('2d');
-
-            for (let index = 0; index < length * 2; index++) {
-
-                if (this.webGLVersion === "1.0") {
-                    // attach the texture to the framebuffer
-                    //TODO
-                    // gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this._offScreenTextures[index], 0);
-                } else {
-                    // attach the specific layer of the textureArray to the framebuffer todo make render debug info inside the renderer so we do not touch internals
-                    gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, fpOutput.texture, 0, index);
-                }
-
-                // check if framebuffer is complete
-                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-                    console.error(`Framebuffer is not complete, could not extract offScreenTexture index ${index}`);
-                    return;
-                }
-
-                // read pixels from the framebuffer
-                const pixels = new Uint8ClampedArray(width * height * 4);  // RGBA format needed???
-                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-
-                const imageData = new ImageData(pixels, width, height);
-                contextIntermediate.putImageData(imageData, 0, 0);
-
-                if (index % 2 === 1) {
-                    ctx.drawImage(this._debugIntermediate, dx + 25, dx + 25);
-                } else {
-                    ctx.drawImage(this._debugIntermediate, dx, dx);
-                }
-                dx += 7;
-
-            }
-            // unbind and delete the framebuffer
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-        }
-
-        /**
-         * @returns {Boolean} true
-         */
-        canRotate() {
-            return true;
-        }
-
-        /**
-         * @returns {Boolean} true if canvas and webgl are supported
-         */
-        static isSupported() {
-            let canvasElement = document.createElement('canvas');
-            let webglContext = $.isFunction(canvasElement.getContext) &&
-                canvasElement.getContext('webgl');
-            let ext = webglContext && webglContext.getExtension('WEBGL_lose_context');
-            if (ext) {
-                ext.loseContext();
-            }
-            return !!(webglContext);
-        }
-
-        /**
-         * @param {TiledImage} tiledImage the tiled image that is calling the function
-         * @returns {Boolean} Whether this drawer requires enforcing minimum tile overlap to avoid showing seams.
-         * @private
-         */
-        minimumOverlapRequired(tiledImage) {
-            // return true if the tiled image is tainted, since the backup canvas drawer will be used.
-            return tiledImage.isTainted();
-        }
-
-
-        /**
-         * Creates an HTML element into which will be drawn.
-         * @private
-         * @returns {HTMLCanvasElement} the canvas to draw into
-         */
-        _createDrawingElement() {
-            // todo better handling, build-in ID does not comply to syntax... :/
-            this._id = this.constructor.idGenerator;
-            // Todo: do we need to have c2d drawing output?
-            // let canvas = $.makeNeutralElement("canvas");
-
-
-            // SETUP WEBGLMODULE
-            const rendererOptions = $.extend({
-                    // Allow override:
-                    ready: () => {},
-                    resetCallback: () => { this.viewer.world.draw(); },
-                    refetchCallback: () => { this.viewer.world.resetItems(); },
-                    debug: false,
-                    webGLPreferredVersion: "2.0",
-                },
-                this.options,
-                {
-                    // Do not allow override:
-                    uniqueId: "osd_" + this._id,
-                    canvasOptions: {
-                        stencil: true
-                    }
-                });
-            this.renderer = new $.WebGLModule(rendererOptions);
-
-            this.renderer.setDataBlendingEnabled(true); // enable alpha blending
-            this.webGLVersion = this.renderer.webglVersion;
-            this.debug = rendererOptions.debug;
-
-            const canvas = this.renderer.canvas;
-            let viewportSize = this._calculateCanvasSize();
-
-            // SETUP CANVASES
-            this._size = new $.Point(viewportSize.x, viewportSize.y); // current viewport size, changed during resize event
-            this._gl = this.renderer.gl;
-            this._setupCanvases();
-
-            // Todo not supported:
-            //this.context = this._outputContext; // API required by tests
-
-            canvas.width = viewportSize.x;
-            canvas.height = viewportSize.y;
-            return canvas;
-        }
-
-        /**
-         * Get the backup renderer (CanvasDrawer) to use if data cannot be used by webgl
-         * Lazy loaded
-         * @private
-         * @returns {CanvasDrawer}
-         */
-        _getBackupCanvasDrawer(){
-            if(!this._backupCanvasDrawer){
-                this._backupCanvasDrawer = this.viewer.requestDrawer('canvas', {mainDrawer: false});
-                this._backupCanvasDrawer.canvas.style.setProperty('visibility', 'hidden');
-                this._backupCanvasDrawer.getSupportedDataFormats = () => this._supportedFormats;
-                this._backupCanvasDrawer.getDataToDraw = this.getDataToDraw.bind(this);
-            }
-
-            return this._backupCanvasDrawer;
-        }
-
-        /**
-         * Sets whether image smoothing is enabled or disabled.
-         * @param {Boolean} enabled if true, uses gl.LINEAR as the TEXTURE_MIN_FILTER and TEXTURE_MAX_FILTER, otherwise gl.NEAREST
-         */
-        setImageSmoothingEnabled(enabled){
-            if( this._imageSmoothingEnabled !== enabled ){
-                this._imageSmoothingEnabled = enabled;
-                this.setInternalCacheNeedsRefresh();
-                this.viewer.requestInvalidate(false);
-            }
-        }
-
-        internalCacheCreate(cache, tile) {
-            let tiledImage = tile.tiledImage;
-            let gl = this._gl;
-            let position;
-
-            // Todo what if not supported for createImageBitmap?
-
-            let data = cache.data;
-
-            if (data instanceof CanvasRenderingContext2D) {
-                data = data.canvas;
-            }
-
-            return createImageBitmap(data).then(data => {
-                // if (!tiledImage.isTainted()) {
-                // todo tained data handle
-                // if((data instanceof CanvasRenderingContext2D) && $.isCanvasTainted(data.canvas)){
-                //     tiledImage.setTainted(true);
-                //     $.console.warn('WebGL cannot be used to draw this TiledImage because it has tainted data. Does crossOriginPolicy need to be set?');
-                //     this._raiseDrawerErrorEvent(tiledImage, 'Tainted data cannot be used by the WebGLDrawer. Falling back to CanvasDrawer for this TiledImage.');
-                //     this.setInternalCacheNeedsRefresh();
-                // } else {
-                let sourceWidthFraction, sourceHeightFraction;
-                if (tile.sourceBounds) {
-                    sourceWidthFraction = Math.min(tile.sourceBounds.width, data.width) / data.width;
-                    sourceHeightFraction = Math.min(tile.sourceBounds.height, data.height) / data.height;
-                } else {
-                    sourceWidthFraction = 1;
-                    sourceHeightFraction = 1;
-                }
-
-                let overlap = tiledImage.source.tileOverlap;
-                if (overlap > 0){
-                    // calculate the normalized position of the rect to actually draw
-                    // discarding overlap.
-                    let tileMeta = this._getTileRenderMeta(tile, tiledImage);
-
-                    let left = (tile.x === 0 ? 0 : tileMeta.overlapX) * sourceWidthFraction;
-                    let top = (tile.y === 0 ? 0 : tileMeta.overlapY) * sourceHeightFraction;
-                    let right = (tile.isRightMost ? 1 : 1 - tileMeta.overlapX) * sourceWidthFraction;
-                    let bottom = (tile.isBottomMost ? 1 : 1 - tileMeta.overlapY) * sourceHeightFraction;
-                    position = new Float32Array([
-                        left, bottom,
-                        left, top,
-                        right, bottom,
-                        right, top
-                    ]);
-                } else {
-                    position = new Float32Array([
-                        0, sourceHeightFraction,
-                        0, 0,
-                        sourceWidthFraction, sourceHeightFraction,
-                        sourceWidthFraction, 0
-                    ]);
-                }
-
-                const tileInfo = {
-                    position: position,
-                    texture: null,
-                };
-
-                if (this.debug) {
-                    tileInfo.debugTiledImage = tiledImage;
-                    tileInfo.debugCanvas = data; //fixme possibly an image
-                }
-
-                try {
-                    const texture = gl.createTexture();
-                    gl.bindTexture(gl.TEXTURE_2D, texture);
-
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this._imageSmoothingEnabled ? this._gl.LINEAR : this._gl.NEAREST);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this._imageSmoothingEnabled ? this._gl.LINEAR : this._gl.NEAREST);
-                    //gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-
-                    // upload the image data into the texture
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, data);
-                    tileInfo.texture = texture;
-                    return tileInfo;
-                } catch (e){
-                    // Todo a bit dirty re-use of the tainted flag, but makes the code more stable
-                    tiledImage.setTainted(true);
-                    $.console.error('Error uploading image data to WebGL. Falling back to canvas renderer.', e);
-                    this._raiseDrawerErrorEvent(tiledImage, 'Unknown error when uploading texture. Falling back to CanvasDrawer for this TiledImage.');
-                    this.setInternalCacheNeedsRefresh();
-                }
-                // }
-                // }
-
-                // TODO fix this
-                // if (data instanceof Image) {
-                //     const canvas = document.createElement( 'canvas' );
-                //     canvas.width = data.width;
-                //     canvas.height = data.height;
-                //     const context = canvas.getContext('2d', { willReadFrequently: true });
-                //     context.drawImage( data, 0, 0 );
-                //     data = context;
-                // }
-                // if (data instanceof CanvasRenderingContext2D) {
-                //     return data;
-                // }
-                $.console.error("Unsupported data used for WebGL Drawer - probably a bug!");
-                return {};
-            }).catch(e => {
-                //TODO: support tile failure - if cache load fails in some way, the tile should be marked as such, and it should be allowed to enter rendering routine nevertheless
-                $.console.error(`Unsupported data type! ${data}`, e);
-            });
-        }
-
-        internalCacheFree(data) {
-            if (data && data.texture) {
-                this._gl.deleteTexture(data.texture);
-                data.texture = null;
-            }
-        }
-
-
-        /**
-         * Draw a rect onto the output canvas for debugging purposes
-         * @param {OpenSeadragon.Rect} rect
-         */
-        drawDebuggingRect(rect){
-            let context = this._outputContext;
-            context.save();
-            context.lineWidth = 2 * $.pixelDensityRatio;
-            context.strokeStyle = this.debugGridColor[0];
-            context.fillStyle = this.debugGridColor[0];
-
-            context.strokeRect(
-                rect.x * $.pixelDensityRatio,
-                rect.y * $.pixelDensityRatio,
-                rect.width * $.pixelDensityRatio,
-                rect.height * $.pixelDensityRatio
-            );
-
-            context.restore();
-        } // unused
-
-        _drawPlaceholder(tiledImage){
-            const bounds = tiledImage.getBounds(true);
-            const rect = this.viewportToDrawerRectangle(tiledImage.getBounds(true));
-            const context = this._outputContext;
-
-            let fillStyle;
-            if ( typeof tiledImage.placeholderFillStyle === "function" ) {
-                fillStyle = tiledImage.placeholderFillStyle(tiledImage, context);
-            }
-            else {
-                fillStyle = tiledImage.placeholderFillStyle;
-            }
-
-            this._offsetForRotation({degrees: this.viewer.viewport.getRotation(true)});
-            context.fillStyle = fillStyle;
-            context.translate(rect.x, rect.y);
-            context.rotate(Math.PI / 180 * bounds.degrees);
-            context.translate(-rect.x, -rect.y);
-            context.fillRect(rect.x, rect.y, rect.width, rect.height);
-            this._restoreRotationChanges();
-        }
-
-
-        // CONTEXT2DPIPELINE FUNCTIONS (from WebGLDrawer)
-        /**
-         * Draw data from the rendering canvas onto the output canvas
-         * cropping and/or debug info as requested.
-         * @private
-         * @param {OpenSeadragon.TiledImage} tiledImage - the tiledImage to draw
-         * @param {Array} tilesToDraw - array of objects containing tiles that were drawn
-         */
-        _applyContext2dPipeline(tiledImage, tilesToDraw, tiledImageIndex) {
-            this._outputContext.save();
-
-            // set composite operation; ignore for first image drawn
-            this._outputContext.globalCompositeOperation = tiledImageIndex === 0 ? null : tiledImage.compositeOperation || this.viewer.compositeOperation;
-            this._outputContext.drawImage(this._renderingCanvas, 0, 0);
-            this._outputContext.restore();
-
-            if(tiledImage.debugMode){
-                const flipped = this.viewer.viewport.getFlip();
-                if(flipped){
-                    this._flip();
-                }
-                this._drawDebugInfo(tilesToDraw, tiledImage, flipped);
-                if(flipped){
-                    this._flip();
-                }
-            }
-        }
-
-        _setClip(){
-            // no-op: called, handled during rendering from tiledImage data
-        }
-
-        /**
-         * Set rotations for viewport & tiledImage
-         * @private
-         * @param {OpenSeadragon.TiledImage} tiledImage
-         */
-        _setRotations(tiledImage) {
-            var saveContext = false;
-            if (this.viewport.getRotation(true) % 360 !== 0) {
-                this._offsetForRotation({
-                    degrees: this.viewport.getRotation(true),
-                    saveContext: saveContext
-                });
-                saveContext = false;
-            }
-            if (tiledImage.getRotation(true) % 360 !== 0) {
-                this._offsetForRotation({
-                    degrees: tiledImage.getRotation(true),
-                    point: this.viewport.pixelFromPointNoRotate(
-                        tiledImage._getRotationPoint(true), true),
-                    saveContext: saveContext
-                });
-            }
-        }
-
-        _offsetForRotation(options) {
-            var point = options.point ?
-                options.point.times($.pixelDensityRatio) :
-                this._getCanvasCenter();
-
-            var context = this._outputContext;
-            context.save();
-
-            context.translate(point.x, point.y);
-            context.rotate(Math.PI / 180 * options.degrees);
-            context.translate(-point.x, -point.y);
-        }
-
-        _flip(options) {
-            options = options || {};
-            var point = options.point ?
-                options.point.times($.pixelDensityRatio) :
-                this._getCanvasCenter();
-            var context = this._outputContext;
-
-            context.translate(point.x, 0);
-            context.scale(-1, 1);
-            context.translate(-point.x, 0);
-        }
-
-        _drawDebugInfo( tilesToDraw, tiledImage, flipped) {
-            for ( var i = tilesToDraw.length - 1; i >= 0; i-- ) {
-                var tile = tilesToDraw[ i ].tile;
-                try {
-                    this._drawDebugInfoOnTile(tile, tilesToDraw.length, i, tiledImage, flipped);
-                } catch(e) {
-                    $.console.error(e);
-                }
-            }
-        }
-
-        _drawDebugInfoOnTile(tile, count, i, tiledImage, flipped) {
-
-            var colorIndex = this.viewer.world.getIndexOfItem(tiledImage) % this.debugGridColor.length;
-            var context = this.context;
-            context.save();
-            context.lineWidth = 2 * $.pixelDensityRatio;
-            context.font = 'small-caps bold ' + (13 * $.pixelDensityRatio) + 'px arial';
-            context.strokeStyle = this.debugGridColor[colorIndex];
-            context.fillStyle = this.debugGridColor[colorIndex];
-
-            this._setRotations(tiledImage);
-
-            if(flipped){
-                this._flip({point: tile.position.plus(tile.size.divide(2))});
-            }
-
-            context.strokeRect(
-                tile.position.x * $.pixelDensityRatio,
-                tile.position.y * $.pixelDensityRatio,
-                tile.size.x * $.pixelDensityRatio,
-                tile.size.y * $.pixelDensityRatio
-            );
-
-            var tileCenterX = (tile.position.x + (tile.size.x / 2)) * $.pixelDensityRatio;
-            var tileCenterY = (tile.position.y + (tile.size.y / 2)) * $.pixelDensityRatio;
-
-            // Rotate the text the right way around.
-            context.translate( tileCenterX, tileCenterY );
-
-            const angleInDegrees = this.viewport.getRotation(true);
-            context.rotate( Math.PI / 180 * -angleInDegrees );
-
-            context.translate( -tileCenterX, -tileCenterY );
-
-            if( tile.x === 0 && tile.y === 0 ){
-                context.fillText(
-                    "Zoom: " + this.viewport.getZoom(),
-                    tile.position.x * $.pixelDensityRatio,
-                    (tile.position.y - 30) * $.pixelDensityRatio
-                );
-                context.fillText(
-                    "Pan: " + this.viewport.getBounds().toString(),
-                    tile.position.x * $.pixelDensityRatio,
-                    (tile.position.y - 20) * $.pixelDensityRatio
-                );
-            }
-            context.fillText(
-                "Level: " + tile.level,
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 20) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Column: " + tile.x,
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 30) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Row: " + tile.y,
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 40) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Order: " + i + " of " + count,
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 50) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Size: " + tile.size.toString(),
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 60) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Position: " + tile.position.toString(),
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 70) * $.pixelDensityRatio
-            );
-
-            if (this.viewport.getRotation(true) % 360 !== 0 ) {
-                this._restoreRotationChanges();
-            }
-            if (tiledImage.getRotation(true) % 360 !== 0) {
-                this._restoreRotationChanges();
-            }
-
-            context.restore();
-        }
-
-        _restoreRotationChanges() {
-            var context = this._outputContext;
-            context.restore();
-        }
-
-        /**
-         * Get the canvas center.
-         * @private
-         * @returns {OpenSeadragon.Point} the center point of the canvas
-         */
-        _getCanvasCenter() {
-            return new $.Point(this.canvas.width / 2, this.canvas.height / 2);
-        }
-    };
-
-    OpenSeadragon.WebGLDrawerModular._idGenerator = 0;
-    Object.defineProperty(OpenSeadragon.WebGLDrawerModular, 'idGenerator', {
-        get: function() {
-            return this._idGenerator++;
-        }
-    });
-}( OpenSeadragon ));
-
-(function($) {
-    /**
-     * Edges shader
-     * data reference must contain one index to the data to render using edges strategy
-     */
-    $.WebGLModule.SobelShader = class extends $.WebGLModule.ShaderLayer {
-
-        static type() {
-            return "sobel";
-        }
-
-        static name() {
-            return "Sobel";
-        }
-
-        static description() {
-            return "sobel edge detector";
-        }
-
-        static sources() {
-            return [{
-                acceptsChannelCount: (x) => x === 3,
-                description: "Data to detect edges on"
-            }];
-        }
-
-        static get defaultControls() {
-            return {
-                use_channel0: {  // eslint-disable-line camelcase
-                    required: "rgb"
-                }
-            };
-        }
-
-        getFragmentShaderExecution() {
-            return `
-            // Sobel kernel for edge detection
-            float kernelX[9] = float[9](-1.0,  0.0,  1.0,
-                                        -2.0,  0.0,  2.0,
-                                        -1.0,  0.0,  1.0);
-
-            float kernelY[9] = float[9](-1.0, -2.0, -1.0,
-                                         0.0,  0.0,  0.0,
-                                         1.0,  2.0,  1.0);
-
-            vec3 sumX = vec3(0.0);
-            vec3 sumY = vec3(0.0);
-            vec2 texelSize = vec2(1.0) / vec2(float(${this.getTextureSize()}.x), float(${this.getTextureSize()}.y));
-
-            // Sampling 3x3 neighborhood
-            int idx = 0;
-            for (int y = -1; y <= 1; y++) {
-                for (int x = -1; x <= 1; x++) {
-                    vec3 sampleColor = ${this.sampleChannel('v_texture_coords + vec2(float(x), float(y)) * texelSize')};
-                    sumX += sampleColor * kernelX[idx];
-                    sumY += sampleColor * kernelY[idx];
-                    idx++;
-                }
-            }
-
-            float edgeStrength = length(sumX) + length(sumY);
-            return vec4(vec3(edgeStrength), 1.0);
-    `;
-        }
-    };
-
-    $.WebGLModule.ShaderMediator.registerLayer($.WebGLModule.SobelShader);
-
-})(OpenSeadragon);
-
-(function($) {
-    /**
-     * Identity shader
-     */
-    $.WebGLModule.IdentityLayer = class extends $.WebGLModule.ShaderLayer {
-
-        static get defaultControls() {
-            return {
-                use_channel0: {  // eslint-disable-line camelcase
-                    required: "rgba"
-                }
-            };
-        }
-
-        static type() {
-            return "identity";
-        }
-
-        static name() {
-            return "Identity";
-        }
-
-        static description() {
-            return "shows the data AS-IS";
-        }
-
-        static sources() {
-            return [{
-                acceptsChannelCount: (x) => x === 4,
-                description: "4d texture to render AS-IS"
-            }];
-        }
-
-        getFragmentShaderExecution() {
-            return `
-        return ${this.sampleChannel("v_texture_coords")};`;
-        }
-    };
-
-    $.WebGLModule.ShaderMediator.registerLayer($.WebGLModule.IdentityLayer);
-
-})(OpenSeadragon);
 
 //# sourceMappingURL=openseadragon.js.map

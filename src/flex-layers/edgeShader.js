@@ -3,7 +3,7 @@
      * Edges shader
      * data reference must contain one index to the data to render using edges strategy
      */
-    $.WebGLModule.SobelShader = class extends $.WebGLModule.ShaderLayer {
+    $.FlexRenderer.SobelShader = class extends $.FlexRenderer.ShaderLayer {
 
         static type() {
             return "sobel";
@@ -64,6 +64,6 @@
         }
     };
 
-    $.WebGLModule.ShaderMediator.registerLayer($.WebGLModule.SobelShader);
+    $.FlexRenderer.ShaderMediator.registerLayer($.FlexRenderer.SobelShader);
 
 })(OpenSeadragon);

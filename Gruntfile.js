@@ -20,22 +20,22 @@ module.exports = function(grunt) {
 
     // ----------
     var packageJson = grunt.file.readJSON("package.json"),
-        distribution = "build/openseadragon/xorend.js",
-        minified = "build/openseadragon/xorend.min.js",
-        packageDirName = "xorend-bin-" + packageJson.version,
+        distribution = "build/openseadragon/flex-renderer.js",
+        minified = "build/openseadragon/flex-renderer.min.js",
+        packageDirName = "flex-renderer-bin-" + packageJson.version,
         packageDir = "build/" + packageDirName + "/",
         releaseRoot = "../site-build/built-openseadragon/",
         coverageDir = 'coverage/' + dateFormat(new Date(), 'yyyymmdd-HHMMss'),
         sources = [
-            "src/webgl-renderer.js",
-            "src/shader-layer.js",
-            "src/shader-controls.js",
-            "src/webgl-context.js",
-            "src/webgl2.js",
-            "src/xo-drawer.js",
-            "src/layers/edgeShader.js",
-            "src/layers/plainShader.js",
-            "src/layers/heatmapShader.js"
+            "src/flex-renderer.js",
+            "src/flex-shader-layer.js",
+            "src/flex-shader-controls.js",
+            "src/flex-webgl-context.js",
+            "src/flex-webgl2.js",
+            "src/flex-drawer.js",
+            "src/flex-layers/edgeShader.js",
+            "src/flex-layers/plainShader.js",
+            "src/flex-layers/heatmapShader.js"
         ];
 
     var banner = "//! <%= pkg.name %> <%= pkg.version %>\n" +
@@ -108,8 +108,8 @@ module.exports = function(grunt) {
                     join_vars: false
                 },
                 sourceMap: true,
-                sourceMapName: 'build/openseadragon/xorend.min.js.map',
-                sourceMapIn: 'build/openseadragon/xorend.js.map'
+                sourceMapName: 'build/openseadragon/flex-renderer.min.js.map',
+                sourceMapIn: 'build/openseadragon/flex-renderer.js.map'
             },
             openseadragon: {
                 src: distribution,

@@ -1,12 +1,12 @@
 (function($) {
     /**
-     * @interface OpenSeadragon.WebGLModule.WebGLImplementation
+     * @interface OpenSeadragon.FlexRenderer.WebGLImplementation
      * Interface for the WebGL rendering implementation which can run on various GLSL versions.
      */
-    $.WebGLModule.WebGLImplementation = class {
+    $.FlexRenderer.WebGLImplementation = class {
         /**
          * Create a WebGL rendering implementation.
-         * @param {WebGLModule} renderer owner of this implementation
+         * @param {FlexRenderer} renderer owner of this implementation
          * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
          * @param {String} webGLVersion "1.0" or "2.0"
          */
@@ -37,11 +37,11 @@
         }
 
         get firstPassProgramKey() {
-            throw("$.WebGLModule.WebGLImplementation::firstPassProgram must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::firstPassProgram must be implemented!");
         }
 
         get secondPassProgramKey() {
-            throw("$.WebGLModule.WebGLImplementation::secondPassProgram must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::secondPassProgram must be implemented!");
         }
 
         /**
@@ -116,31 +116,31 @@
          * @return {String} "1.0" or "2.0"
          */
         getVersion() {
-            throw("$.WebGLModule.WebGLImplementation::getVersion() must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::getVersion() must be implemented!");
         }
 
         sampleTexture() {
-            throw("$.WebGLModule.WebGLImplementation::sampleTexture() must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::sampleTexture() must be implemented!");
         }
 
         getTextureSize() {
-            throw("$.WebGLModule.WebGLImplementation::getTextureSize() must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::getTextureSize() must be implemented!");
         }
 
         getShaderLayerGLSLIndex() {
-            throw("$.WebGLModule.WebGLImplementation::getShaderLayerGLSLIndex() must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::getShaderLayerGLSLIndex() must be implemented!");
         }
 
         createProgram() {
-            throw("$.WebGLModule.WebGLImplementation::createProgram() must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::createProgram() must be implemented!");
         }
 
         loadProgram() {
-            throw("$.WebGLModule.WebGLImplementation::loadProgram() must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::loadProgram() must be implemented!");
         }
 
         useProgram() {
-            throw("$.WebGLModule.WebGLImplementation::useProgram() must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::useProgram() must be implemented!");
         }
 
         /**
@@ -153,7 +153,7 @@
          * @param {Number} levels number of layers that are rendered, kind of 'depth' parameter, an integer
          *
          * @instance
-         * @memberof WebGLModule
+         * @memberof FlexRenderer
          */
         setDimensions(x, y, width, height, levels) {
             //no-op
@@ -175,19 +175,19 @@
          * available are vec4 arguments 'fg' and 'bg'
          * e.g.:
          *   return vec4(fg.rgb * bg.a, fg.a);
-         * @param {string} name one of OpenSeadragon.WebGLModule.BLEND_MODE
+         * @param {string} name one of OpenSeadragon.FlexRenderer.BLEND_MODE
          * @return {string}
          */
         getBlendingFunction(name) {
-            throw("$.WebGLModule.WebGLImplementation::blendingFunction must be implemented!");
+            throw("$.FlexRenderer.WebGLImplementation::blendingFunction must be implemented!");
         }
     };
 
     /**
      * WebGL Program instance
-     * @class OpenSeadragon.WebGLModule.Program
+     * @class OpenSeadragon.FlexRenderer.Program
      */
-    $.WebGLModule.Program = class {
+    $.FlexRenderer.Program = class {
         constructor(context, gl) {
             this.gl = gl;
             this.context = context;
@@ -283,10 +283,10 @@
         }
     };
 
-    $.WebGLModule.WebGL10 = class extends $.WebGLModule.WebGLImplementation {
+    $.FlexRenderer.WebGL10 = class extends $.FlexRenderer.WebGLImplementation {
         /**
          * Create a WebGL 1.0 rendering implementation.
-         * @param {OpenSeadragon.WebGLModule} renderer
+         * @param {OpenSeadragon.FlexRenderer} renderer
          * @param {WebGLRenderingContext} gl
          */
         constructor(renderer, gl) {
@@ -395,14 +395,14 @@
             } // end of for cycle
 
             const vertexShaderSource = this._getVertexShaderSource();
-            const fragmentShaderSource = this._getFragmentShaderSource(definition, execution, customBlendFunctions, $.WebGLModule.ShaderLayer.__globalIncludes);
+            const fragmentShaderSource = this._getFragmentShaderSource(definition, execution, customBlendFunctions, $.FlexRenderer.ShaderLayer.__globalIncludes);
             const build = this.constructor._compileProgram(program, gl, {
                 vertexShader: vertexShaderSource,
                 fragmentShader: fragmentShaderSource
             }, $.console.error, this.renderer.debug);
 
             if (!build) {
-                throw new Error("$.WebGLModule.WebGL10::createProgram: WebGLProgram could not be built!");
+                throw new Error("$.FlexRenderer.WebGL10::createProgram: WebGLProgram could not be built!");
             }
             return program;
         }

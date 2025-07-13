@@ -1,6 +1,6 @@
-# OpenSeadragon - xORend Renderer
+# OpenSeadragon - Flex Renderer
 
-Versatile GPU-accelerated drawer implementation for OpenSeadragon. The name comes from [xOpat viewer](https://github.com/RationAI/xopat), 
+Versatile GPU-accelerated drawer implementation for OpenSeadragon. The design originates from [xOpat viewer](https://github.com/RationAI/xopat), 
 where the basis for this rendering engine was developed.
 
 See it in action and get started using it at [https://openseadragon.github.io/][openseadragon].
@@ -12,9 +12,9 @@ Load this renderer after OpenSeadragon and before creating the viewer. It will a
 
 ````js
 let viewer = OpenSeadragon({
-    drawer: 'xo-rend',
+    drawer: 'flex-renderer',
     drawerOptions: {
-        'xo-rend': {
+        'flex-renderer': {
             // optional renderer configuration
             // debug: true
         }
@@ -81,7 +81,7 @@ UI to DOM when called.
 
 ````js
 drawerOptions: {
-   'xo-rend':{
+   'flex-renderer':{
       htmlHandler: (shaderLayer, shaderConfig) => {
          const container = document.getElementById('my-shader-ui-container');
          // Create custom layer controls - you can add more HTML controls allowing users to
@@ -104,23 +104,69 @@ drawerOptions: {
 }
 ````
 
+UI Components are named arbitrarily (note the reserved `use_` prefix for global parameters though).
+They can be configured like so:
+````js
+{
+   type: 'heatmap',
+   params: {
+       'color': '#ff0000', // color to use for the heatmap
+   }        
+}
+````
+Or:
+````js
+{
+   type: 'colormap',
+   params: {
+       'color': {
+           'type': 'color',
+           'default': '#ff0000'
+           // .. and other properties - depends on the target control type
+       }
+   }        
+}
+````
+
+Note that the name of the control in params depends on the shader layer.
+Shader layer defines ``color`` as a name for UI control:
+
+````js
+ static get defaultControls() {
+            return {
+                use_channel0: {  // eslint-disable-line camelcase
+                    default: "a"
+                },
+                color: {
+                    default: {type: "color", default: "#fff700", title: "Color: "},
+                    accepts: (type, instance) => type === "vec3",
+                },
+    ...
+````
+But since it does not hardcode any specific properties (missing `required` property map),
+we can provide any values we want (including type change) as long as we pass the ``accepts`` check,
+which in this case verifies the control outputs ``vec3`` type.
+
+
 ### Demo Playground
 Once dev dependencies are installed, you can run the demo playground to see the renderer in action:
 ```bash
 npm run dev
 ```
-and open http://localhost:8000/test/demo/xo-rend.html in your browser.
+and open http://localhost:8000/test/demo/flex-renderer.html in your browser.
 
 ## Roadmap
  - Bugfixing & getting ready for the first release
-   - Known bug: navigator does not reflect properly rendering changes made after first rendering occurs 
+   - Known bug: navigator does not reflect properly rendering changes every time
    - Fixing tests: inherited from OpenSeadragon, they expect incompatible behavior
    - Fixing coverage tests
  - Adding support for WebGL 1.0 (fallback)
  - Modularize ShaderLayers
    - Implement modules (sample color, apply gaussian...) to connect together to create a ShaderLayer. 
+ - Add support for concave clipping polygons.
  - Adding support for better debugging & cropping
    - For now, only convex polygons are supported
+ - Dynamic documentation that parses available shaders, controls, and shows what can be used where. 
 
 #### What will not be supported
  - Tainted Data. The purpose of this renderer is to draw advanced visualizations on GPU: if your
@@ -135,9 +181,9 @@ If you want to use OpenSeadragon in your own projects, you can find the latest s
 OpenSeadragon is released under the New BSD license. For details, see the [LICENSE.txt file][github-license].
 
 [openseadragon]: https://openseadragon.github.io/
-[github-releases]: https://github.com/openseadragon/openseadragon/releases
-[github-contributing]: https://github.com/openseadragon/openseadragon/blob/master/CONTRIBUTING.md
-[github-license]: https://github.com/openseadragon/openseadragon/blob/master/LICENSE.txt
+[github-releases]: https://github.com/openseadragon/flex-render/releases
+[github-contributing]: https://github.com/openseadragon/flex-render/blob/master/CONTRIBUTING.md
+[github-license]: https://github.com/openseadragon/flex-render/blob/master/LICENSE.txt
 
 ## Sponsors
 

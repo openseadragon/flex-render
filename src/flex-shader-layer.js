@@ -5,22 +5,22 @@
      * @property {object} _layers           storage of ShaderLayers, {ShaderLayer.type(): ShaderLayer}
      * @property {Boolean} _acceptsShaders  allow new ShaderLayer registrations
      *
-     * @class OpenSeadragon.WebGLModule.ShaderMediator
-     * @memberOf OpenSeadragon.WebGLModule
+     * @class OpenSeadragon.FlexRenderer.ShaderMediator
+     * @memberOf OpenSeadragon.FlexRenderer
      */
-    $.WebGLModule.ShaderMediator = class {
+    $.FlexRenderer.ShaderMediator = class {
         /**
          * Register ShaderLayer.
-         * @param {typeof OpenSeadragon.WebGLModule.ShaderLayer} shaderLayer
+         * @param {typeof OpenSeadragon.FlexRenderer.ShaderLayer} shaderLayer
          */
         static registerLayer(shaderLayer) {
             if (this._acceptsShaders) {
                 if (this._layers[shaderLayer.type()]) {
-                    console.warn(`OpenSeadragon.WebGLModule.ShaderMediator::registerLayer: ShaderLayer ${shaderLayer.type()} already registered, overwriting the content!`);
+                    console.warn(`OpenSeadragon.FlexRenderer.ShaderMediator::registerLayer: ShaderLayer ${shaderLayer.type()} already registered, overwriting the content!`);
                 }
                 this._layers[shaderLayer.type()] = shaderLayer;
             } else {
-                console.warn("OpenSeadragon.WebGLModule.ShaderMediator::registerLayer: ShaderMediator is set to not accept new ShaderLayers!");
+                console.warn("OpenSeadragon.FlexRenderer.ShaderMediator::registerLayer: ShaderMediator is set to not accept new ShaderLayers!");
             }
         }
 
@@ -32,14 +32,14 @@
             if (accepts === true || accepts === false) {
                 this._acceptsShaders = accepts;
             } else {
-                console.warn("OpenSeadragon.WebGLModule.ShaderMediator::setAcceptsRegistrations: Accepts parameter must be either true or false!");
+                console.warn("OpenSeadragon.FlexRenderer.ShaderMediator::setAcceptsRegistrations: Accepts parameter must be either true or false!");
             }
         }
 
         /**
          * Get the ShaderLayer implementation.
          * @param {String} shaderType equals to a wanted ShaderLayers.type()'s return value
-         * @return {typeof OpenSeadragon.WebGLModule.ShaderLayer}
+         * @return {typeof OpenSeadragon.FlexRenderer.ShaderLayer}
          */
         static getClass(shaderType) {
             return this._layers[shaderType];
@@ -47,7 +47,7 @@
 
         /**
          * Get all available ShaderLayers.
-         * @return {[typeof OpenSeadragon.WebGLModule.ShaderLayer]}
+         * @return {[typeof OpenSeadragon.FlexRenderer.ShaderLayer]}
          */
         static availableShaders() {
             return Object.values(this._layers);
@@ -62,8 +62,8 @@
         }
     };
     // STATIC PROPERTIES
-    $.WebGLModule.ShaderMediator._acceptsShaders = true;
-    $.WebGLModule.ShaderMediator._layers = {};
+    $.FlexRenderer.ShaderMediator._acceptsShaders = true;
+    $.FlexRenderer.ShaderMediator._layers = {};
 
 
 
@@ -77,10 +77,10 @@
      * @property {Object} filterNames
      * @property {Object} __globalIncludes
      *
-     * @interface OpenSeadragon.WebGLModule.ShaderLayer
-     * @memberOf OpenSeadragon.WebGLModule
+     * @interface OpenSeadragon.FlexRenderer.ShaderLayer
+     * @memberOf OpenSeadragon.FlexRenderer
      */
-    $.WebGLModule.ShaderLayer = class {
+    $.FlexRenderer.ShaderLayer = class {
         /**
          * @typedef channelSettings
          * @type {Object}
@@ -101,15 +101,15 @@
          * @param {Function} privateOptions.refetch     // callback to reinitialize the whole WebGLDrawer; NOT USED
          *
          * @constructor
-         * @memberOf WebGLModule.ShaderLayer
+         * @memberOf FlexRenderer.ShaderLayer
          */
         constructor(id, privateOptions) {
-            // unique identifier of this ShaderLayer for WebGLModule
+            // unique identifier of this ShaderLayer for FlexRenderer
             this.id = id;
             // unique identifier of this ShaderLayer for WebGLProgram
             this.uid = this.constructor.type().replaceAll('-', '_') + '_' + id;
-            if (!$.WebGLModule.idPattern.test(this.uid)) {
-                console.error(`Invalid ID for the shader: ${id} does not match to the pattern`, $.WebGLModule.idPattern);
+            if (!$.FlexRenderer.idPattern.test(this.uid)) {
+                console.error(`Invalid ID for the shader: ${id} does not match to the pattern`, $.FlexRenderer.idPattern);
             }
 
             this.__shaderConfig = privateOptions.shaderConfig;
@@ -315,7 +315,7 @@
                     continue;
                 }
 
-                const control = $.WebGLModule.UIControls.build(this, controlName, controlConfig, this.id + '_' + controlName, this._customControls[controlName]);
+                const control = $.FlexRenderer.UIControls.build(this, controlName, controlConfig, this.id + '_' + controlName, this._customControls[controlName]);
                 // enables iterating over the owned controls
                 this._controls[controlName] = control;
                 // simplify usage of controls (e.g. this.opacity instead of this._controls.opacity)
@@ -389,7 +389,7 @@
         includeGlobalCode(key, code) {
             const container = this.constructor.__globalIncludes;
             if (container[key]) {
-                console.warn('$.WebGLModule.ShaderLayer::includeGlobalCode: Global code with key', key, 'already exists in this.__globalIncludes. Overwriting the content!');
+                console.warn('$.FlexRenderer.ShaderLayer::includeGlobalCode: Global code with key', key, 'already exists in this.__globalIncludes. Overwriting the content!');
             }
             container[key] = code;
         }
@@ -505,7 +505,7 @@
          */
         resetMode(options = {}) {
             this._mode = this._resetOption("use_mode", this.webglContext.supportedUseModes, options);
-            this._blend = this._resetOption("use_blend", OpenSeadragon.WebGLModule.BLEND_MODE, options);
+            this._blend = this._resetOption("use_blend", OpenSeadragon.FlexRenderer.BLEND_MODE, options);
         }
 
         _resetOption(name, supportedValueList, options = {}) {
@@ -682,12 +682,12 @@ ${code}
      * }
      * @type {any}
      */
-    $.WebGLModule.ShaderLayer.customParams = {};
+    $.FlexRenderer.ShaderLayer.customParams = {};
 
     /**
      * Parameter to save shaderLayer's functionality that can be shared and reused between ShaderLayer instantions.
      */
-    $.WebGLModule.ShaderLayer.__globalIncludes = {};
+    $.FlexRenderer.ShaderLayer.__globalIncludes = {};
 
 
     //not really modular
@@ -698,16 +698,16 @@ ${code}
     // filtered variable will be inserted, notice pow does not need inner brackets since its an argument...
     //note: pow avoided in gamma, not usable on vectors, we use pow(x, y) === exp(y*log(x))
     // TODO: implement filters as shader nodes instead!
-    $.WebGLModule.ShaderLayer.filters = {};
-    $.WebGLModule.ShaderLayer.filters["use_gamma"] = (x) => ["exp(log(", `) / ${$.WebGLModule.ShaderLayer.toShaderFloatString(x, 1)})`];
-    $.WebGLModule.ShaderLayer.filters["use_exposure"] = (x) => ["(1.0 - exp(-(", `)* ${$.WebGLModule.ShaderLayer.toShaderFloatString(x, 1)}))`];
-    $.WebGLModule.ShaderLayer.filters["use_logscale"] = (x) => {
-        x = $.WebGLModule.ShaderLayer.toShaderFloatString(x, 1);
+    $.FlexRenderer.ShaderLayer.filters = {};
+    $.FlexRenderer.ShaderLayer.filters["use_gamma"] = (x) => ["exp(log(", `) / ${$.FlexRenderer.ShaderLayer.toShaderFloatString(x, 1)})`];
+    $.FlexRenderer.ShaderLayer.filters["use_exposure"] = (x) => ["(1.0 - exp(-(", `)* ${$.FlexRenderer.ShaderLayer.toShaderFloatString(x, 1)}))`];
+    $.FlexRenderer.ShaderLayer.filters["use_logscale"] = (x) => {
+        x = $.FlexRenderer.ShaderLayer.toShaderFloatString(x, 1);
         return [`((log(${x} + (`, `)) - log(${x})) / (log(${x}+1.0)-log(${x})))`];
     };
 
-    $.WebGLModule.ShaderLayer.filterNames = {};
-    $.WebGLModule.ShaderLayer.filterNames["use_gamma"] = "Gamma";
-    $.WebGLModule.ShaderLayer.filterNames["use_exposure"] = "Exposure";
-    $.WebGLModule.ShaderLayer.filterNames["use_logscale"] = "Logarithmic scale";
+    $.FlexRenderer.ShaderLayer.filterNames = {};
+    $.FlexRenderer.ShaderLayer.filterNames["use_gamma"] = "Gamma";
+    $.FlexRenderer.ShaderLayer.filterNames["use_exposure"] = "Exposure";
+    $.FlexRenderer.ShaderLayer.filterNames["use_logscale"] = "Logarithmic scale";
 })(OpenSeadragon);

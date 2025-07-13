@@ -12,10 +12,10 @@
     /**
      * @property {Number} idGenerator unique ID getter
      *
-     * @class OpenSeadragon.XoDrawer
+     * @class OpenSeadragon.FlexDrawer
      * @classdesc implementation of WebGL renderer for an {@link OpenSeadragon.Viewer}
      */
-    OpenSeadragon.XoDrawer = class extends OpenSeadragon.DrawerBase {
+    OpenSeadragon.FlexDrawer = class extends OpenSeadragon.DrawerBase {
         /**
          * @param {Object} options options for this Drawer
          * @param {OpenSeadragon.Viewer} options.viewer the Viewer that owns this Drawer
@@ -25,18 +25,16 @@
          * @param {Object} options.options optional
          *
          * @constructor
-         * @memberof OpenSeadragon.XoDrawer
+         * @memberof OpenSeadragon.FlexDrawer
          */
         constructor(options){
             super(options);
 
-            // Navigator has viewer parent reference
-            this._isNavigatorDrawer = !!this.viewer.viewer;
             this._destroyed = false;
             this._backupCanvasDrawer = null;
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
-            this._supportedFormats = ["blob", "context2d", "image"];
+            this._supportedFormats = ["rasterBlob", "context2d", "image"];
 
             // Create a link for downloading off-screen textures, or input image data tiles. Only for the main drawer, not the minimap.
             // Generated with ChatGPT, customized.
@@ -61,7 +59,6 @@
                 this._debugCanvas = canvas; //todo dirty
                 this._extractionFB =  this.renderer.gl.createFramebuffer();
                 this._debugIntermediate = document.createElement("canvas");
-
             }
 
             // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
@@ -90,7 +87,7 @@
          * @returns {String}
          */
         getType() {
-            return 'xo-rend';
+            return 'flex-renderer';
         }
 
         getSupportedDataFormats() {
@@ -120,6 +117,10 @@
         setRenderingConfig(shaders, shaderOrder = undefined) {
             // todo reset also when reordering tiled images!
             // or we could change order only
+
+            if (!this._isNavigatorDrawer && this.viewer.navigator) {
+                this.viewer.navigator.drawer.setRenderingConfig(shaders, shaderOrder);
+            }
 
             const willBeConfigured = !!shaders;
             if (!willBeConfigured) {
@@ -160,7 +161,20 @@
             }
 
             if (!this._isNavigatorDrawer && this.viewer.navigator) {
-                this.viewer.navigator.drawer.configureTiledImage(tiledImage, shader);
+                const nav = this.viewer.navigator;
+                let tiledImageNavigator = null;
+                for (let i = 0; i < nav.world.getItemCount(); i++) {
+                    if (nav.world.getItemAt(i).source === tiledImage.source) {
+                        tiledImageNavigator = nav.world.getItemAt(i);
+                        break;
+                    }
+                }
+
+                if (tiledImageNavigator) {
+                    this.viewer.navigator.drawer.configureTiledImage(tiledImageNavigator, shader);
+                } else {
+                    $.console.warn("Could not find corresponding tiled image for the navigator!");
+                }
             }
 
             return shader;
@@ -235,7 +249,22 @@
             }
 
             if (!config.id) {
-                config.id = this.constructor.idGenerator;
+                // potentially problematic, relies on the fact that navigator is always initialized second
+                // shared ID are required for controls, which have only 1 present HTML but potentially two listeners
+                if (this._isNavigatorDrawer) {
+                    const parent = this.viewer.viewer;
+                    for (let i = 0; i < parent.world.getItemCount(); i++) {
+                        const tiledImageParent = parent.world.getItemAt(i);
+                        if (tiledImageParent.source === tiledImage.source) {
+                            config.id = tiledImageParent.__shaderConfig.id;
+                            break;
+                        }
+                    }
+                }
+                if (!config.id) {
+                    // generate a unique ID for the shader
+                    config.id = this.constructor.idGenerator;
+                }
             }
 
             const shaderId = config.id;
@@ -281,7 +310,7 @@
         }
 
         /**
-         * Clean up the XoDrawer, removing all resources.
+         * Clean up the FlexDrawer, removing all resources.
          */
         destroy() {
             if (this._destroyed) {
@@ -407,7 +436,7 @@
 
         // DRAWING METHODS
         /**
-         * Draw using WebGLModule.
+         * Draw using FlexRenderer.
          * @param {[TiledImage]} tiledImages array of TiledImage objects to draw
          */
         draw(tiledImages) {
@@ -755,29 +784,14 @@
          * @returns {HTMLCanvasElement} the canvas to draw into
          */
         _createDrawingElement() {
+            // Navigator has viewer parent reference
+            // todo: make this official property
+            this._isNavigatorDrawer = !!this.viewer.viewer;
+
             // todo better handling, build-in ID does not comply to syntax... :/
             this._id = this.constructor.idGenerator;
-            // Todo: do we need to have c2d drawing output?
-            // let canvas = $.makeNeutralElement("canvas");
 
-            const redraw = this._isNavigatorDrawer ? () => {} : () => {
-                const navigator = this.viewer.navigator;
-                if (navigator) {
-                    navigator.forceRedraw();
-                }
-                this.viewer.forceRedraw();
-            };
-
-            const resetItems = this._isNavigatorDrawer ? () => {} : () => {
-                const navigator = this.viewer.navigator;
-                if (navigator) {
-                    navigator.world.resetItems();
-                }
-                this.viewer.world.resetItems();
-            };
-
-
-            // SETUP WEBGLMODULE
+            // SETUP FlexRenderer
             const rendererOptions = $.extend(
                 // Default
                 {
@@ -789,16 +803,18 @@
                 this.options,
                 // Required
                 {
-                    redrawCallback: redraw,
-                    refetchCallback: resetItems,
+                    redrawCallback: () => this.viewer.world.resetItems(),
+                    refetchCallback: () => this.viewer.forceRedraw(),
                     uniqueId: "osd_" + this._id,
                     // Navigator must not have the handler since it would attempt to define the controls twice
                     htmlHandler: this._isNavigatorDrawer ? null : this.options.htmlHandler,
+                    // However, navigator must have interactive same as parent renderer to bind events to the controls
+                    interactive: !!this.options.htmlHandler,
                     canvasOptions: {
                         stencil: true
                     }
                 });
-            this.renderer = new $.WebGLModule(rendererOptions);
+            this.renderer = new $.FlexRenderer(rendererOptions);
 
             this.renderer.setDataBlendingEnabled(true); // enable alpha blending
             this.webGLVersion = this.renderer.webglVersion;
@@ -819,9 +835,6 @@
             canvas.height = viewportSize.y;
             return canvas;
         }
-
-
-
 
         /**
          * Get the backup renderer (CanvasDrawer) to use if data cannot be used by webgl
@@ -1208,8 +1221,8 @@
         }
     };
 
-    OpenSeadragon.XoDrawer._idGenerator = 0;
-    Object.defineProperty(OpenSeadragon.XoDrawer, 'idGenerator', {
+    OpenSeadragon.FlexDrawer._idGenerator = 0;
+    Object.defineProperty(OpenSeadragon.FlexDrawer, 'idGenerator', {
         get: function() {
             return this._idGenerator++;
         }

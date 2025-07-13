@@ -2,7 +2,7 @@
     /**
      * Identity shader
      */
-    $.WebGLModule.HeatmapLayer = class extends $.WebGLModule.ShaderLayer {
+    $.FlexRenderer.HeatmapLayer = class extends $.FlexRenderer.ShaderLayer {
 
         static type() {
             return "heatmap";
@@ -59,6 +59,6 @@
         }
     };
 
-    $.WebGLModule.ShaderMediator.registerLayer($.WebGLModule.HeatmapLayer);
+    $.FlexRenderer.ShaderMediator.registerLayer($.FlexRenderer.HeatmapLayer);
 
 })(OpenSeadragon);
