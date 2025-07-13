@@ -1,4 +1,4 @@
-# OpenSeadragon - Flex Renderer
+# OpenSeadragon - Flex Render
 
 Versatile GPU-accelerated drawer implementation for OpenSeadragon. The design originates from [xOpat viewer](https://github.com/RationAI/xopat), 
 where the basis for this rendering engine was developed.
@@ -153,11 +153,10 @@ Once dev dependencies are installed, you can run the demo playground to see the 
 ```bash
 npm run dev
 ```
-and open http://localhost:8000/test/demo/flex-renderer.html in your browser.
+and open http://localhost:8000/test/demo/flex-renderer-playground.html in your browser.
 
 ## Roadmap
  - Bugfixing & getting ready for the first release
-   - Known bug: navigator does not reflect properly rendering changes every time
    - Fixing tests: inherited from OpenSeadragon, they expect incompatible behavior
    - Fixing coverage tests
  - Adding support for WebGL 1.0 (fallback)
@@ -167,6 +166,10 @@ and open http://localhost:8000/test/demo/flex-renderer.html in your browser.
  - Adding support for better debugging & cropping
    - For now, only convex polygons are supported
  - Dynamic documentation that parses available shaders, controls, and shows what can be used where. 
+
+#### What might be supported
+ - Canvas2D proxy. People tend to use Canvas2D api to access the rendered data, which
+  is currently not possible as the output canvas is native WebGL (or other rendering engine) element.
 
 #### What will not be supported
  - Tainted Data. The purpose of this renderer is to draw advanced visualizations on GPU: if your
