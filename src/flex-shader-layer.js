@@ -137,12 +137,14 @@
          * Manuall constructor for ShaderLayer. Keeped for backward compatibility.
          */
         construct() {
+            // Default init respects cached value, manual usage overrides.
+
             // set up the color channel(s) for texture sampling
-            this.resetChannel(this._customControls);
+            this.resetChannel(this._customControls, false);
             // set up the blending mode
-            this.resetMode(this._customControls);
+            this.resetMode(this._customControls, false);
             // set up the filters to be applied to sampled data from the texture
-            this.resetFilters(this._customControls);
+            this.resetFilters(this._customControls, false);
             // build the ShaderLayer's controls
             this._buildControls();
         }
@@ -429,8 +431,9 @@
          * Set color channel(s) for texture sampling.
          * @param {Object} options
          * @param {String} options.use_channel[X] "r", "g" or "b" channel to sample index X, default "r"
+         * @param {boolean} [force=true] when false, cached values are prioritized
          */
-        resetChannel(options = {}) {
+        resetChannel(options = {}, force = true) {
             if (Object.keys(options) === 0) {
                 options = this._customControls;
             }
@@ -443,7 +446,8 @@
                 if (options[controlName] || predefined) {
                     let channel = predefined && predefined.required;
                     if (!channel) {
-                        channel = this.loadProperty(controlName, options[controlName] || predefined.default);
+                        channel = force ? options[controlName] :
+                            this.loadProperty(controlName, options[controlName] || predefined.default);
                     }
 
                     // (if channel is not defined) or (is defined and not string) or (is string and doesn't contain __channelPattern)
@@ -501,14 +505,16 @@
         /**
          * Set blending mode.
          * @param {Object} options
-         * @param {String} options.use_mode blending mode to use: one of supportedUseModes
+         * @param {String} options.use_mode rendering mode to use: one of supportedUseModes
+         * @param {String} options.use_blend blending mode to use: one of standard supported blending modes (+ "mask")
+         * @param {boolean} [force=true] when false, cached values are prioritized
          */
-        resetMode(options = {}) {
-            this._mode = this._resetOption("use_mode", this.webglContext.supportedUseModes, options);
-            this._blend = this._resetOption("use_blend", OpenSeadragon.FlexRenderer.BLEND_MODE, options);
+        resetMode(options = {}, force = true) {
+            this._mode = this._resetOption("use_mode", this.webglContext.supportedUseModes, options, force);
+            this._blend = this._resetOption("use_blend", OpenSeadragon.FlexRenderer.BLEND_MODE, options, force);
         }
 
-        _resetOption(name, supportedValueList, options = {}) {
+        _resetOption(name, supportedValueList, options = {}, force = true) {
             let result;
             if (!options) {
                 options = this._customControls;
@@ -519,12 +525,25 @@
             result = predefined && predefined.required;
 
             if (!result) {
-                if (options[name]) {
+                let dynamicValue = options[name];
+                if (name === "use_mode") {
+                    // Supporting legacy names
+                    if (dynamicValue === "mask") {
+                        dynamicValue = "blend";
+                        $.console.warn("OpenSeadragon.FlexRenderer.ShaderLayer: use_mode 'mask' is deprecated, use 'blend' instead.");
+                    }
+                    if (dynamicValue === "mask_clip") {
+                        dynamicValue = "clip";
+                        $.console.warn("OpenSeadragon.FlexRenderer.ShaderLayer: use_mode 'mask_clip' is deprecated, use 'clip' instead.");
+                    }
+                }
+
+                if (dynamicValue) {
                     // firstly try to load from cache, if not in cache, use options.use_mode
-                    result = this.loadProperty(name, options[name]);
+                    result = force ? dynamicValue : this.loadProperty(name, dynamicValue);
 
                     // if mode was not in the cache and we got default value = options.use_mode, store it in the cache
-                    if (result === options[name]) {
+                    if (result === dynamicValue) {
                         this.storeProperty(name, result);
                     }
                 } else {
@@ -547,7 +566,8 @@
             let code = this.webglContext.getBlendingFunction(this._blend);
             if (!code) {
                 $.console.warn("Invalid blending - using default", this._blend, this);
-                this._blend = 'mask';
+                // Set to mask, typical wanted value if mode is not show. If mode=show, there is a hardcoded blend function.
+                this._blend = 'blend';
                 code = this.webglContext.getBlendingFunction(this._blend);
             }
             return `vec4 ${functionName}(vec4 fg, vec4 bg) {
@@ -567,8 +587,9 @@ ${code}
         /**
          * Set filters for a ShaderLayer.
          * @param {Object} options contains filters to apply, currently supported are "use_gamma", "use_exposure", "use_logscale"
+         * @param {boolean} [force=true] when false, cached values are prioritized
          */
-        resetFilters(options = {}) {
+        resetFilters(options = {}, force = true) {
             if (Object.keys(options) === 0) {
                 options = this._customControls;
             }
@@ -580,9 +601,8 @@ ${code}
                 let value = predefined ? predefined.required : undefined;
                 if (value === undefined) {
                     if (options[key]) {
-                        value = this.loadProperty(key, options[key]);
-                    }
-                    else {
+                        value = force ? options[key] : this.loadProperty(key, options[key]);
+                    } else {
                         value = predefined ? predefined.default : undefined;
                     }
                 }

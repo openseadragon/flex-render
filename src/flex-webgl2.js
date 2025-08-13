@@ -223,7 +223,7 @@ ${shader.getFragmentShaderExecution()}
                 //prevents the layer from being accounted for in the rendering (error or not visible)
 
                 // For explanation of this logics see main shader part below
-                if (previousShaderLayer._mode !== "mask_clip") {
+                if (previousShaderLayer._mode !== "clip") {
                     execution += `${getRemainingBlending()}
 // ${previousShaderLayer.constructor.type()} - Disabled (error or visible = false)
 intermediate_color = vec4(.0);`;
@@ -247,9 +247,9 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(vec4(.0), intermediat
 
             // To understand the code below: show & mask are basically same modes: they blend atop
             // of existing data. 'Show' just uses built-in alpha blending.
-            // However, mask_clip blends on the previous output only (and it can chain!).
+            // However, clip blends on the previous output only (and it can chain!).
 
-            if (previousShaderLayer._mode !== "mask_clip") {
+            if (previousShaderLayer._mode !== "clip") {
                     execution += `${getRemainingBlending()}
 // ${previousShaderLayer.constructor.type()} - Blending
 intermediate_color = ${previousShaderLayer.uid}_execution();
@@ -258,7 +258,7 @@ intermediate_color.a = intermediate_color.a * ${opacityModifier};`;
                 remainingBlenForShaderID = previousShaderID;
             } else {
                 execution += `
-// ${previousShaderLayer.constructor.type()} - Clipmask
+// ${previousShaderLayer.constructor.type()} - Clipping
 clip_color = ${previousShaderLayer.uid}_execution();
 clip_color.a = clip_color.a * ${opacityModifier};
 intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermediate_color);`;

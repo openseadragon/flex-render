@@ -137,6 +137,7 @@
             this._configuredExternally = true;
             this.renderer.deleteShaders();
             for (let shaderID in shaders) {
+                console.log("Registering shader", shaderID, shaders[shaderID], this._isNavigatorDrawer);
                 let config = shaders[shaderID];
                 this.setRenderingConfigShader(shaderID, config);
             }
@@ -214,7 +215,7 @@
                     }
                 }
             }
-            config._renderContext = this.renderer.createShaderLayer(key, config);
+            config.__renderContext = this.renderer.createShaderLayer(key, config);
         }
 
         /**
@@ -289,7 +290,7 @@
             }
 
             const shader = this.renderer.createShaderLayer(shaderId, config);
-            config._renderContext = shader;
+            config.__renderContext = shader;
 
             tiledImage.__wglCompositeHandler = e => {
                 // todo consider just removing 'show' and using 'mask' by default with correct blending
@@ -299,7 +300,7 @@
                 // eslint-disable-next-line camelcase
                 config.params.use_blend = tiledImage.compositeOperation;
                 // eslint-disable-next-line camelcase
-                config.params.use_mode = 'mask';
+                config.params.use_mode = 'blend';
                 shader.resetMode(config.params, false);
                 this._requestRebuild(0);
             };
@@ -317,7 +318,6 @@
                 return;
             }
             const gl = this._gl;
-
 
             // clean all texture units; adapted from https://stackoverflow.com/a/23606581/1214731
             var numTextureUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
@@ -803,8 +803,8 @@
                 this.options,
                 // Required
                 {
-                    redrawCallback: () => this.viewer.world.resetItems(),
-                    refetchCallback: () => this.viewer.forceRedraw(),
+                    redrawCallback: () => this.viewer.forceRedraw(),
+                    refetchCallback: () => this.viewer.world.resetItems(),
                     uniqueId: "osd_" + this._id,
                     // Navigator must not have the handler since it would attempt to define the controls twice
                     htmlHandler: this._isNavigatorDrawer ? null : this.options.htmlHandler,

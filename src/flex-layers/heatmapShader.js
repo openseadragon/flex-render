@@ -26,7 +26,7 @@
         static get defaultControls() {
             return {
                 use_channel0: {  // eslint-disable-line camelcase
-                    default: "a"
+                    default: "r"
                 },
                 color: {
                     default: {type: "color", default: "#fff700", title: "Color: "},

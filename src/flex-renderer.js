@@ -371,6 +371,8 @@
          * @memberof FlexRenderer
          */
         createShaderLayer(id, shaderConfig) {
+            id = this._sanitizeKey(id);
+
             const Shader = $.FlexRenderer.ShaderMediator.getClass(shaderConfig.type);
             if (!Shader) {
                 throw new Error(`$.FlexRenderer::createShaderLayer: Unknown shader type '${shaderConfig.type}'!`);
@@ -408,12 +410,25 @@
             return this._shaders;
         }
 
+        getShaderLayer(id) {
+            id = this._sanitizeKey(id);
+            return this._shaders[id];
+        }
+
+        getShaderLayerConfig(id) {
+            const shader = this.getShaderLayer(id);
+            if (shader) {
+                return shader.getConfig();
+            }
+            return undefined;
+        }
+
         /**
          *
          * @param order
          */
         setShaderLayerOrder(order) {
-            this._shadersOrder = order;
+            this._shadersOrder = order.map(this._sanitizeKey);
         }
 
         /**
@@ -433,6 +448,7 @@
          * @memberof FlexRenderer
          */
         removeShader(id) {
+            id = this._sanitizeKey(id);
             const shader = this._shaders[id];
             if (!shader) {
                 return;
@@ -474,6 +490,19 @@
             }
             this.webglContext.destroy();
             this._programImplementations = {};
+        }
+
+        _sanitizeKey(key) {
+            if (!$.FlexRenderer.idPattern.test(key)) {
+                key = key.replace(/[^0-9a-zA-Z_]/g, '');
+                key = key.replace(/_+/g, '_');
+                key = key.replace(/^_+/, '');
+
+                if (!key) {
+                    throw new Error("Invalid key: sanitization removed all parts!");
+                }
+            }
+            return key;
         }
     };
 

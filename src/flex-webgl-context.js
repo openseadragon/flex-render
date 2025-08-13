@@ -164,10 +164,11 @@
 
         /**
          * Get supported render modes by the renderer. First should be the default.
+         * Keywords with *mask* are deprecated.
          * @return {string[]}
          */
         get supportedUseModes() {
-            return ["show", "mask", "mask_clip"];
+            return ["show", "blend", "clip", "mask", "clip_mask"];
         }
 
         /**
@@ -695,7 +696,7 @@
         last_blend_func_id = -2;
     }`;
             }
-            else if (shaderLayer._mode === "mask") {
+            else if (shaderLayer._mode === "blend") {
                 modeDefinition += `
         // blend last_color with overall_color using blend_func of the last shader using deffered blending
         deffered_blend();
@@ -703,7 +704,7 @@
         // switch case pointing to this.getCustomBlendFunction() code
         last_blend_func_id = ${this.getShaderLayerGLSLIndex(shaderLayer.uid)};
     }`;
-            } else if (shaderLayer._mode === "mask_clip") {
+            } else if (shaderLayer._mode === "clip") {
                 modeDefinition += `
         last_color = ${shaderLayer.uid}_blend_func(color, last_color);
     }`;
