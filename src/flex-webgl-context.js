@@ -20,6 +20,7 @@
         /**
          * Static WebGLRenderingContext creation (to avoid class instantiation in case of missing support).
          * @param {HTMLCanvasElement} canvas
+         * @param {string} webGLVersion
          * @param {Object} contextAttributes desired options used for the canvas webgl context creation
          * @return {WebGLRenderingContext|WebGL2RenderingContext}
          */
@@ -186,19 +187,19 @@
 
     /**
      * WebGL Program instance
-     * @class OpenSeadragon.FlexRenderer.Program
+     * @class OpenSeadragon.FlexRenderer.WGLProgram
      */
-    $.FlexRenderer.Program = class {
-        constructor(context, gl) {
-            this.gl = gl;
-            this.context = context;
-            this._webGLProgram = null;
+    $.FlexRenderer.WGLProgram = class extends $.FlexRenderer.Program {
 
-            /**
-             *
-             * @type {boolean}
-             */
-            this.requiresLoad = true;
+        /**
+         *
+         * @param context
+         * @param gl {WebGLProgram} Rendering program.
+         */
+        constructor(context, gl) {
+            super(context);
+            this.gl = gl;
+            this._webGLProgram = null;
             /**
              *
              * @type {string}
@@ -235,17 +236,20 @@
         }
 
         /**
-         * Load() is done once per program lifetime.
-         * Request subsequent call
+         * Retrieve program error message
+         * @return {string|undefined} error message of the current state or undefined if OK
          */
-        requireLoad() {
-            this.requiresLoad = true;
+        getValidateErrorMessage() {
+            if (!this.vertexShader || !this.fragmentShader) {
+                return "Program does not define vertexShader or fragmentShader shader property!";
+            }
+            return undefined;
         }
 
         /**
          * Load program. Arbitrary arguments.
          * Called ONCE per shader lifetime. Should not be called twice
-         * unless requested by requireLoad() -- you should not set values
+         * unless requested by this.requireLoad=true call -- you should not set values
          * that are lost when webgl program is changed.
          */
         load() {

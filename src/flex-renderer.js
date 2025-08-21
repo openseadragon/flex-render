@@ -119,7 +119,7 @@
             this.running = false;           // boolean; true if FlexRenderer is ready to render
             this._program = null;            // WebGLProgram
             this._shaders = {};
-            this._shadersOrder = [];
+            this._shadersOrder = null;
             this._programImplementations = {};
 
             this.canvasContextOptions = incomingOptions.canvasOptions;
@@ -248,14 +248,26 @@
 
             const webglProgram = this.gl.createProgram();
             program._webGLProgram = webglProgram;
-            program.build(this._shaders, this._shadersOrder || Object.keys(this._shaders)); //todo somehow make shaders registrable to different workflows
+
+            // TODO inner control type udpates are not checked here
+            for (let shaderId in this._shaders) {
+                const shader = this._shaders[shaderId];
+                const config = shader.getConfig();
+                // Check explicitly type of the config, if updated, recreate shader
+                if (shader.constructor.type() !== config.type) {
+                    this.createShaderLayer(shaderId, config, false);
+                }
+            }
+
+            program.build(this._shaders, this.getShaderLayerOrder());
             // Used also to re-compile, set requiresLoad to true
             program.requiresLoad = true;
 
-            if (!program.vertexShader || !program.fragmentShader) {
+            const errMsg = program.getValidateErrorMessage();
+            if (errMsg) {
                 this.gl.deleteProgram(webglProgram);
                 program._webGLProgram = null;
-                throw Error("Program does not define vertexShader or fragmentShader shader property!");
+                throw Error(errMsg);
             }
 
             this._programImplementations[key] = program;
@@ -315,17 +327,24 @@
                     if (this.htmlHandler) {
                         this.htmlReset();
 
-                        for (const shaderLayer of Object.values(this._shaders)) {
+                        for (const shaderId of this.getShaderLayerOrder()) {
+                            const shaderLayer = this._shaders[shaderId];
                             const shaderConfig = shaderLayer.__shaderConfig;
                             this.htmlHandler(
                                 shaderLayer,
                                 shaderConfig
                             );
                         }
+
+                        this.raiseEvent('html-controls-created', {
+                            name: name,
+                            program: program,
+                            shaderLayers: this._shaders,
+                        });
                     }
 
-                    for (const shaderLayer of Object.values(this._shaders)) {
-                        shaderLayer.init();
+                    for (const shaderId in this._shaders) {
+                        this._shaders[shaderId].init();
                     }
                 }
             }
@@ -365,12 +384,13 @@
          * Create and initialize new ShaderLayer instantion and its controls.
          * @param id
          * @param {ShaderConfig} shaderConfig object bound to a concrete ShaderLayer instance
+         * @param {boolean} [copyConfig=false] if true, deep copy of the config is used to avoid modification of the parameter
          * @returns {ShaderLayer} instance of the created shaderLayer
          *
          * @instance
          * @memberof FlexRenderer
          */
-        createShaderLayer(id, shaderConfig) {
+        createShaderLayer(id, shaderConfig, copyConfig = false) {
             id = this._sanitizeKey(id);
 
             const Shader = $.FlexRenderer.ShaderMediator.getClass(shaderConfig.type);
@@ -378,8 +398,30 @@
                 throw new Error(`$.FlexRenderer::createShaderLayer: Unknown shader type '${shaderConfig.type}'!`);
             }
 
-            if (shaderConfig.visible === undefined) {
-                shaderConfig.visible = 1;
+            const defaultConfig = {
+                id: id,
+                name: "Layer",
+                type: "identity",
+                visible: 1,
+                fixed: false,
+                tiledImages: [0],
+                params: {},
+                cache: {},
+            };
+            if (copyConfig) {
+                // Deep copy to avoid modification propagation
+                shaderConfig = $.extend(true, defaultConfig, shaderConfig);
+            } else {
+                // Ensure we keep references where possible -> this will make shader object within drawers (e.g. navigator VS main)
+                for (let propName in defaultConfig) {
+                    if (shaderConfig[propName] === undefined) {
+                        shaderConfig[propName] = defaultConfig[propName];
+                    }
+                }
+            }
+
+            if (this._shaders[id]) {
+                this.removeShader(id);
             }
 
             // TODO a bit dirty approach, make the program key usable from outside
@@ -428,6 +470,9 @@
          * @param order
          */
         setShaderLayerOrder(order) {
+            if (!order) {
+                this._shadersOrder = null;
+            }
             this._shadersOrder = order.map(this._sanitizeKey);
         }
 
@@ -437,7 +482,7 @@
          * @return {*}
          */
         getShaderLayerOrder() {
-            return this._shadersOrder;
+            return this._shadersOrder || Object.keys(this._shaders);
         }
 
         /**
@@ -547,5 +592,89 @@
 
     $.FlexRenderer.jsonReplacer = function (key, value) {
         return key.startsWith("_") || ["eventSource"].includes(key) ? undefined : value;
+    };
+
+    /**
+     * Generic computational program interface
+     * @type {{new(*): $.FlexRenderer.Program, context: *, _requiresLoad: boolean, prototype: Program}}
+     */
+    $.FlexRenderer.Program = class {
+        constructor(context) {
+            this.context = context;
+            this._requiresLoad = true;
+        }
+
+        /**
+         *
+         * @param shaderMap
+         * @param shaderKeys
+         */
+        build(shaderMap, shaderKeys) {
+            throw new Error("$.FlexRenderer.Program::build: Not implemented!");
+        }
+
+        /**
+         * Retrieve program error message
+         * @return {string|undefined} error message of the current state or undefined if OK
+         */
+        getValidateErrorMessage() {
+            return undefined;
+        }
+
+        /**
+         * Set whether the program requires load.
+         * @type {boolean}
+         */
+        set requiresLoad(value) {
+            if (this._requiresLoad !== value) {
+                this._requiresLoad = value;
+
+                // Consider this event..
+                // if (value) {
+                //     this.context.raiseEvent('program-requires-load', {
+                //         program: this,
+                //         requiresLoad: value
+                //     });
+                // }
+            }
+        }
+
+        /**
+         * Whether the program requires load.
+         * @return {boolean}
+         */
+        get requiresLoad() {
+            return this._requiresLoad;
+        }
+
+        /**
+         * Create program.
+         * @param width
+         * @param height
+         */
+        created(width, height) {}
+
+        /**
+         * Load program. Arbitrary arguments.
+         * Called ONCE per shader lifetime. Should not be called twice
+         * unless requested by requireLoad() -- you should not set values
+         * that are lost when webgl program is changed.
+         */
+        load() {}
+
+        /**
+         * Use program. Arbitrary arguments.
+         */
+        use() {}
+
+        /**
+         * Unload program. No arguments.
+         */
+        unload() {}
+
+        /**
+         * Destroy program. No arguments.
+         */
+        destroy() {}
     };
 })(OpenSeadragon);

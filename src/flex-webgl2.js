@@ -155,7 +155,7 @@ return blendAlpha(fg, bg, bg.rgb + fg.rgb - 2.0 * bg.rgb * fg.rgb);`,
 };
 
 
-$.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.Program {
+$.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgram {
     constructor(context, gl) {
         super(context, gl);
         this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
@@ -450,7 +450,7 @@ void main() {
     }
 };
 
-$.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.Program {
+$.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgram {
 
     constructor(context, gl) {
         super(context, gl);

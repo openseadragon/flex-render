@@ -34,7 +34,7 @@ configuring ``TiledImages`` via JSON `shader layers`. The configuration can happ
    ````
  - handled externally: completely override the renderer output by custom rendering configuration
     ````js
-    viewer.drawer.setRenderingConfig({
+    viewer.drawer.overrideConfigureAll({
         'key1': {
             type: 'identity',
             tiledImages: [0],
@@ -74,6 +74,7 @@ Except for the ``type`` property the golden rule is: don't specify what you don'
 ````
 With ``use_mode=show`` the blending is ignored. With `blend`, blending is respected, with `clip` applied only against the previous layer.
 
+Updates to the configuration are generally reflected immediately, if you re-build the program. 
 
 ### UI Components
 When you want to let users to control shader inputs through UI, you need to provide
@@ -151,7 +152,7 @@ which in this case verifies the control outputs ``vec3`` type.
 ### Changing Configuration Values
 Config values can be changed anytime. It is a good idea to not to force the renderer to copy the object,
 this way you can share the configuration object active state all the time and modify it as needed.
-For changes to take effect, you need to call ``viewer.drawer._requestRebuild()``, same
+For changes to take effect, you need to call ``viewer.drawer.rebuild()``, same
 for navigator if used. Moreover, ``use_*`` properties must call `reset*()` method. For filters, call `resetFilters(...)`.
 For change in mode or blending, call `resetMode()`. For changes in raster channel mapping, call `resetChannels()`.
 ````js
@@ -159,7 +160,7 @@ const shaderLayer = viewer.drawer.renderer.getShaderLayer('my-layer');
 const config = shaderLayer.getConfig();
 config.params.use_gamma = 1.0; // change gamma to 1.0
 shaderLayer.resetFilters(config.params); // reset the use_gamma property to apply the change
-viewer.drawer._requestRebuild();
+viewer.drawer.rebuild();
 ````
 We might work on this more to simplify it.
 

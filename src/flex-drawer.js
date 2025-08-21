@@ -35,6 +35,7 @@
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
             this._supportedFormats = ["rasterBlob", "context2d", "image"];
+            this.rebuildCounter = 0;
 
             // Create a link for downloading off-screen textures, or input image data tiles. Only for the main drawer, not the minimap.
             // Generated with ChatGPT, customized.
@@ -108,18 +109,18 @@
         }
 
         /**
-         * todo docs
-         *
-         * todo use in xopat instead of configuration
-         * @param shaders
-         * @param shaderOrder
+         * Override the default configuration: the renderer will use given shaders,
+         * supplied with data from collection of TiledImages, to render.
+         * TiledImages are treated only as data sources, the rendering outcome is fully in controls of the shader specs.
+         * @param {object} shaders map of id -> shader config value
+         * @param {Array<string>} [shaderOrder=undefined] custom order of shader ids to render.
          */
-        setRenderingConfig(shaders, shaderOrder = undefined) {
+        overrideConfigureAll(shaders, shaderOrder = undefined) {
             // todo reset also when reordering tiled images!
             // or we could change order only
 
             if (!this._isNavigatorDrawer && this.viewer.navigator) {
-                this.viewer.navigator.drawer.setRenderingConfig(shaders, shaderOrder);
+                this.viewer.navigator.drawer.overrideConfigureAll(shaders, shaderOrder);
             }
 
             const willBeConfigured = !!shaders;
@@ -137,9 +138,9 @@
             this._configuredExternally = true;
             this.renderer.deleteShaders();
             for (let shaderID in shaders) {
-                console.log("Registering shader", shaderID, shaders[shaderID], this._isNavigatorDrawer);
+                $.console.log("Registering shader", shaderID, shaders[shaderID], this._isNavigatorDrawer);
                 let config = shaders[shaderID];
-                this.setRenderingConfigShader(shaderID, config);
+                this.renderer.createShaderLayer(shaderID, config, this.options.copyShaderConfig);
             }
             shaderOrder = shaderOrder || Object.keys(shaders);
             this.renderer.setShaderLayerOrder(shaderOrder);
@@ -147,12 +148,27 @@
         }
 
         /**
+         * Retrieve shader config by its key. Shader IDs are known only
+         * when overrideConfigureAll() called
+         * @param key
+         * @return {ShaderConfig|*|undefined}
+         */
+        getOverriddenShaderConfig(key) {
+            const shaderLayer = this.renderer.getAllShaders()[key];
+            return shaderLayer ? shaderLayer.getConfig() : undefined;
+        }
+
+        /**
          * If shaders are managed internally, tiled image can be configured a single custom
-         * shader if desired. This shader is ignored if setRenderingConfig({...}) used.
+         * shader if desired. This shader is ignored if overrideConfigureAll({...}) used.
          * @param {OpenSeadragon.TiledImage} tiledImage
          * @param {ShaderConfig} shader
          */
         configureTiledImage(tiledImage, shader) {
+            if (this.options.copyShaderConfig) {
+                shader = $.extend(true, {}, shader);
+            }
+
             shader.id = shader.id || tiledImage.__shaderConfig.id || this.constructor.idGenerator;
             tiledImage.__shaderConfig = shader;
 
@@ -179,43 +195,6 @@
             }
 
             return shader;
-        }
-
-        /**
-         * Retrieve shader config by its key. Shader IDs are known only
-         * when setRenderingConfig() called
-         * @param key
-         * @return {ShaderConfig|*|undefined}
-         */
-        getRenderingConfig(key) {
-            const shaderLayer = this.renderer.getAllShaders()[key];
-            return shaderLayer ? shaderLayer.getConfig() : undefined;
-        }
-
-        // todo better names
-        setRenderingConfigShader(key, config) {
-            const defaultConfig = {
-                id: this.constructor.idGenerator,
-                name: "Layer",
-                type: "identity",
-                visible: 1,
-                fixed: false,
-                tiledImages: [0],
-                params: {},
-                cache: {},
-            };
-            if (this.options.copyShaderConfig) {
-                // Deep copy to avoid modification propagation
-                config = $.extend(true, defaultConfig, config);
-            } else {
-                // Ensure we keep references where possible -> this will make shader object within drawers (e.g. navigator VS main)
-                for (let propName in defaultConfig) {
-                    if (config[propName] === undefined) {
-                        config[propName] = defaultConfig[propName];
-                    }
-                }
-            }
-            config.__renderContext = this.renderer.createShaderLayer(key, config);
         }
 
         /**
@@ -284,19 +263,14 @@
 
             if (!config.params.use_blend && tiledImage.compositeOperation) {
                 // eslint-disable-next-line camelcase
-                config.params.use_mode = 'mask';
+                config.params.use_mode = 'blend';
                 // eslint-disable-next-line camelcase
                 config.params.use_blend = tiledImage.compositeOperation;
             }
 
-            const shader = this.renderer.createShaderLayer(shaderId, config);
-            config.__renderContext = shader;
-
             tiledImage.__wglCompositeHandler = e => {
-                // todo consider just removing 'show' and using 'mask' by default with correct blending
-
+                const shader = this.renderer.getShaderLayer(shaderId);
                 const config = shader.getConfig();
-
                 // eslint-disable-next-line camelcase
                 config.params.use_blend = tiledImage.compositeOperation;
                 // eslint-disable-next-line camelcase
@@ -306,8 +280,18 @@
             };
 
             tiledImage.addHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
+
+            // copy config only applied when passed externally
+            this.renderer.createShaderLayer(shaderId, config, false);
             this._requestRebuild();
             return config;
+        }
+
+        /**
+         * Rebuild current shaders to reflect updated configurations.
+         */
+        rebuild() {
+            this._requestRebuild();
         }
 
         /**
@@ -386,6 +370,7 @@
                 this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this.viewer.world.getItemCount());
                 // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
                 this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+                this.rebuildCounter++;
                 this._rebuildHandle = null;
                 setTimeout(() => {
                     this.viewer.forceRedraw();
@@ -777,6 +762,45 @@
             return tiledImage.isTainted();
         }
 
+        /**
+         * Wraps a function to ensure that it is executed only once per context.
+         * @param context
+         * @param fn
+         * @return {(function(...[*]): void)|*|undefined}
+         * @private
+         */
+        wrapSharedExecution(context, fn) {
+            if (!fn) {
+                return undefined;
+            }
+
+            let contextMap = $.FlexDrawer.__privateWrapFlags;
+            if (!contextMap) {
+                $.FlexDrawer.__privateWrapFlags = contextMap = {};
+            }
+            let contextGuard = contextMap[context];
+            if (!contextGuard) {
+                contextGuard = contextMap[context] = {
+                    count: 0,
+                    owners: 1
+                };
+            } else {
+                contextGuard.owners++;
+            }
+
+            return function (...args) {
+                let contextMap = $.FlexDrawer.__privateWrapFlags;
+                let guard = contextMap[context];
+                if (guard.count === 0) {
+                    fn(...args);
+                }
+                guard.count++;
+                if (guard.count === guard.owners) {
+                    // allow next execution of the owner
+                    guard.count = 0;
+                }
+            };
+        }
 
         /**
          * Creates an HTML element into which will be drawn.
@@ -785,7 +809,7 @@
          */
         _createDrawingElement() {
             // Navigator has viewer parent reference
-            // todo: make this official property
+            // todo: what about reference strip??
             this._isNavigatorDrawer = !!this.viewer.viewer;
 
             // todo better handling, build-in ID does not comply to syntax... :/
@@ -806,6 +830,7 @@
                     redrawCallback: () => this.viewer.forceRedraw(),
                     refetchCallback: () => this.viewer.world.resetItems(),
                     uniqueId: "osd_" + this._id,
+                    // TODO: problem when navigator renders first
                     // Navigator must not have the handler since it would attempt to define the controls twice
                     htmlHandler: this._isNavigatorDrawer ? null : this.options.htmlHandler,
                     // However, navigator must have interactive same as parent renderer to bind events to the controls
@@ -982,242 +1007,8 @@
             }
         }
 
-
-        /**
-         * Draw a rect onto the output canvas for debugging purposes
-         * @param {OpenSeadragon.Rect} rect
-         */
-        drawDebuggingRect(rect){
-            let context = this._outputContext;
-            context.save();
-            context.lineWidth = 2 * $.pixelDensityRatio;
-            context.strokeStyle = this.debugGridColor[0];
-            context.fillStyle = this.debugGridColor[0];
-
-            context.strokeRect(
-                rect.x * $.pixelDensityRatio,
-                rect.y * $.pixelDensityRatio,
-                rect.width * $.pixelDensityRatio,
-                rect.height * $.pixelDensityRatio
-            );
-
-            context.restore();
-        } // unused
-
-        _drawPlaceholder(tiledImage){
-            const bounds = tiledImage.getBounds(true);
-            const rect = this.viewportToDrawerRectangle(tiledImage.getBounds(true));
-            const context = this._outputContext;
-
-            let fillStyle;
-            if ( typeof tiledImage.placeholderFillStyle === "function" ) {
-                fillStyle = tiledImage.placeholderFillStyle(tiledImage, context);
-            }
-            else {
-                fillStyle = tiledImage.placeholderFillStyle;
-            }
-
-            this._offsetForRotation({degrees: this.viewer.viewport.getRotation(true)});
-            context.fillStyle = fillStyle;
-            context.translate(rect.x, rect.y);
-            context.rotate(Math.PI / 180 * bounds.degrees);
-            context.translate(-rect.x, -rect.y);
-            context.fillRect(rect.x, rect.y, rect.width, rect.height);
-            this._restoreRotationChanges();
-        }
-
-
-        // CONTEXT2DPIPELINE FUNCTIONS (from WebGLDrawer)
-        /**
-         * Draw data from the rendering canvas onto the output canvas
-         * cropping and/or debug info as requested.
-         * @private
-         * @param {OpenSeadragon.TiledImage} tiledImage - the tiledImage to draw
-         * @param {Array} tilesToDraw - array of objects containing tiles that were drawn
-         */
-        _applyContext2dPipeline(tiledImage, tilesToDraw, tiledImageIndex) {
-            this._outputContext.save();
-
-            // set composite operation; ignore for first image drawn
-            this._outputContext.globalCompositeOperation = tiledImageIndex === 0 ? null : tiledImage.compositeOperation || this.viewer.compositeOperation;
-            this._outputContext.drawImage(this._renderingCanvas, 0, 0);
-            this._outputContext.restore();
-
-            if(tiledImage.debugMode){
-                const flipped = this.viewer.viewport.getFlip();
-                if(flipped){
-                    this._flip();
-                }
-                this._drawDebugInfo(tilesToDraw, tiledImage, flipped);
-                if(flipped){
-                    this._flip();
-                }
-            }
-        }
-
         _setClip(){
             // no-op: called, handled during rendering from tiledImage data
-        }
-
-        /**
-         * Set rotations for viewport & tiledImage
-         * @private
-         * @param {OpenSeadragon.TiledImage} tiledImage
-         */
-        _setRotations(tiledImage) {
-            var saveContext = false;
-            if (this.viewport.getRotation(true) % 360 !== 0) {
-                this._offsetForRotation({
-                    degrees: this.viewport.getRotation(true),
-                    saveContext: saveContext
-                });
-                saveContext = false;
-            }
-            if (tiledImage.getRotation(true) % 360 !== 0) {
-                this._offsetForRotation({
-                    degrees: tiledImage.getRotation(true),
-                    point: this.viewport.pixelFromPointNoRotate(
-                        tiledImage._getRotationPoint(true), true),
-                    saveContext: saveContext
-                });
-            }
-        }
-
-        _offsetForRotation(options) {
-            var point = options.point ?
-                options.point.times($.pixelDensityRatio) :
-                this._getCanvasCenter();
-
-            var context = this._outputContext;
-            context.save();
-
-            context.translate(point.x, point.y);
-            context.rotate(Math.PI / 180 * options.degrees);
-            context.translate(-point.x, -point.y);
-        }
-
-        _flip(options) {
-            options = options || {};
-            var point = options.point ?
-                options.point.times($.pixelDensityRatio) :
-                this._getCanvasCenter();
-            var context = this._outputContext;
-
-            context.translate(point.x, 0);
-            context.scale(-1, 1);
-            context.translate(-point.x, 0);
-        }
-
-        _drawDebugInfo( tilesToDraw, tiledImage, flipped) {
-            for ( var i = tilesToDraw.length - 1; i >= 0; i-- ) {
-                var tile = tilesToDraw[ i ].tile;
-                try {
-                    this._drawDebugInfoOnTile(tile, tilesToDraw.length, i, tiledImage, flipped);
-                } catch(e) {
-                    $.console.error(e);
-                }
-            }
-        }
-
-        _drawDebugInfoOnTile(tile, count, i, tiledImage, flipped) {
-
-            var colorIndex = this.viewer.world.getIndexOfItem(tiledImage) % this.debugGridColor.length;
-            var context = this.context;
-            context.save();
-            context.lineWidth = 2 * $.pixelDensityRatio;
-            context.font = 'small-caps bold ' + (13 * $.pixelDensityRatio) + 'px arial';
-            context.strokeStyle = this.debugGridColor[colorIndex];
-            context.fillStyle = this.debugGridColor[colorIndex];
-
-            this._setRotations(tiledImage);
-
-            if(flipped){
-                this._flip({point: tile.position.plus(tile.size.divide(2))});
-            }
-
-            context.strokeRect(
-                tile.position.x * $.pixelDensityRatio,
-                tile.position.y * $.pixelDensityRatio,
-                tile.size.x * $.pixelDensityRatio,
-                tile.size.y * $.pixelDensityRatio
-            );
-
-            var tileCenterX = (tile.position.x + (tile.size.x / 2)) * $.pixelDensityRatio;
-            var tileCenterY = (tile.position.y + (tile.size.y / 2)) * $.pixelDensityRatio;
-
-            // Rotate the text the right way around.
-            context.translate( tileCenterX, tileCenterY );
-
-            const angleInDegrees = this.viewport.getRotation(true);
-            context.rotate( Math.PI / 180 * -angleInDegrees );
-
-            context.translate( -tileCenterX, -tileCenterY );
-
-            if( tile.x === 0 && tile.y === 0 ){
-                context.fillText(
-                    "Zoom: " + this.viewport.getZoom(),
-                    tile.position.x * $.pixelDensityRatio,
-                    (tile.position.y - 30) * $.pixelDensityRatio
-                );
-                context.fillText(
-                    "Pan: " + this.viewport.getBounds().toString(),
-                    tile.position.x * $.pixelDensityRatio,
-                    (tile.position.y - 20) * $.pixelDensityRatio
-                );
-            }
-            context.fillText(
-                "Level: " + tile.level,
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 20) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Column: " + tile.x,
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 30) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Row: " + tile.y,
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 40) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Order: " + i + " of " + count,
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 50) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Size: " + tile.size.toString(),
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 60) * $.pixelDensityRatio
-            );
-            context.fillText(
-                "Position: " + tile.position.toString(),
-                (tile.position.x + 10) * $.pixelDensityRatio,
-                (tile.position.y + 70) * $.pixelDensityRatio
-            );
-
-            if (this.viewport.getRotation(true) % 360 !== 0 ) {
-                this._restoreRotationChanges();
-            }
-            if (tiledImage.getRotation(true) % 360 !== 0) {
-                this._restoreRotationChanges();
-            }
-
-            context.restore();
-        }
-
-        _restoreRotationChanges() {
-            var context = this._outputContext;
-            context.restore();
-        }
-
-        /**
-         * Get the canvas center.
-         * @private
-         * @returns {OpenSeadragon.Point} the center point of the canvas
-         */
-        _getCanvasCenter() {
-            return new $.Point(this.canvas.width / 2, this.canvas.height / 2);
         }
     };
 
