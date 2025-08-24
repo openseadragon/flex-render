@@ -45,8 +45,8 @@
      */
 
     /**
-     * @typedef {Object} FPOutput
-     * @typedef {Object} SPOutput
+     * @typedef {Object} RenderOutput
+     * @property {Number} sourcesLength
      */
 
     /**
@@ -72,7 +72,6 @@
          *
          * @param {String} incomingOptions.webGLPreferredVersion    prefered WebGL version, "1.0" or "2.0"
          *
-         * @param {Function} incomingOptions.ready                  function called when FlexRenderer is ready to render
          * @param {Function} incomingOptions.redrawCallback          function called when user input changed; triggers re-render of the viewport
          * @param {Function} incomingOptions.refetchCallback        function called when underlying data changed; triggers re-initialization of the whole WebGLDrawer
          * @param {Boolean} incomingOptions.debug                   debug mode on/off
@@ -98,8 +97,6 @@
 
             this.webGLPreferredVersion = incomingOptions.webGLPreferredVersion;
 
-
-            this.ready = incomingOptions.ready;
             this.redrawCallback = incomingOptions.redrawCallback;
             this.refetchCallback = incomingOptions.refetchCallback;
             this.debug = incomingOptions.debug;
@@ -116,11 +113,12 @@
                 this.htmlReset = () => {};
             }
 
-            this.running = false;           // boolean; true if FlexRenderer is ready to render
+            this.running = false;
             this._program = null;            // WebGLProgram
             this._shaders = {};
             this._shadersOrder = null;
             this._programImplementations = {};
+            this.__firstPassResult = null;
 
             this.canvasContextOptions = incomingOptions.canvasOptions;
             const canvas = document.createElement("canvas");
@@ -200,7 +198,7 @@
         /**
          * Call to first-pass draw using WebGLProgram.
          * @param {FPRenderPackage[]} source
-         * @return {FPOutput}
+         * @return {RenderOutput}
          * @instance
          * @memberof FlexRenderer
          */
@@ -209,21 +207,26 @@
             if (this.useProgram(program, "first-pass")) {
                 program.load();
             }
-            return program.use(source);
+            const result = program.use(this.__firstPassResult, source);
+            if (this.debug) {
+                this._showOffscreenMatrix(result, source.length, {scale: 0.5, pad: 8});
+            }
+            this.__firstPassResult = result;
+            this.__firstPassResult.sourcesLength = source.length;
+            return result;
         }
 
         /**
          * Call to second-pass draw
-         * @param {FPOutput} source
          * @param {SPRenderPackage[]} renderArray
-         * @return {*}
+         * @return {RenderOutput}
          */
-        secondPassProcessData(source, renderArray) {
+        secondPassProcessData(renderArray) {
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);
             }
-            return program.use(source, renderArray);
+            return program.use(this.__firstPassResult, renderArray);
         }
 
         /**
@@ -274,6 +277,7 @@
             if ($.FlexRenderer.WebGLImplementation._compileProgram(
                 webglProgram, this.gl, program, $.console.error, this.debug
             )) {
+                this.gl.useProgram(webglProgram);
                 program.created(webglProgram, this.canvas.width, this.canvas.height);
                 return key;
             }
@@ -350,8 +354,6 @@
             }
 
             if (!this.running) {
-                //TODO: might not be the best place to call, timeout necessary to allow finish initialization of OSD before called
-                setTimeout(() => this.ready());
                 this.running = true;
             }
             return needsUpdate;
@@ -375,8 +377,10 @@
             if (!implementation) {
                 return;
             }
+            implementation.unload();
             implementation.destroy();
             this.gl.deleteProgram(implementation._webGLProgram);
+            this.__firstPassResult = null;
             this._programImplementations[key] = null;
         }
 
@@ -530,6 +534,7 @@
 
         destroy() {
             this.htmlReset();
+            this.deleteShaders();
             for (let pId in this._programImplementations) {
                 this.deleteProgram(pId);
             }
@@ -548,6 +553,316 @@
                 }
             }
             return key;
+        }
+
+        // Todo below are debug and other utilities hardcoded for WebGL2. In case of other engines support, these methods
+        //  must be adjusted or moved to appropriate interfaces
+
+        /**
+         * Convenience: copy your RenderOutput {texture, stencil} to desination.
+         * Returns { texture: WebGLTexture, stencil: WebGLTexture } in the destination context.
+         *
+         * @param {OpenSeadragon.FlexRenderer} dst
+         * @param {RenderOutput} [renderOutput]  first pass output to copy, defaults to latest internal state
+         * @param {Object} [opts]  options
+         * @return {RenderOutput}
+         */
+        copyRenderOutputToContext(dst, renderOutput = undefined, {
+            level = 0,
+            format = null,
+            type = null,
+            internalFormatGuess = null,
+        } = {}) {
+            renderOutput = renderOutput || this.__firstPassResult;
+            const out = {};
+            if (renderOutput.texture) {
+                out.texture = this._copyTexture2DArrayBetweenContexts({
+                    dstGL: dst.gl, srcTex: renderOutput.texture, dstTex: dst.__firstPassResult.texture,
+                    textureLayerCount: renderOutput.sourcesLength, format, type, internalFormatGuess,
+                });
+            }
+            if (renderOutput.stencil) {
+                out.stencil = this._copyTexture2DArrayBetweenContexts({
+                    dstGL: dst.gl, srcTex: renderOutput.stencil, dstTex: dst.__firstPassResult.stencil,
+                    textureLayerCount: renderOutput.sourcesLength, format, type, internalFormatGuess,
+                });
+            }
+            out.sourcesLength = renderOutput.sourcesLength || 0;
+            dst.__firstPassResult = out;
+            return out;
+        }
+
+        /**
+         * Copy a TEXTURE_2D_ARRAY from one WebGL2 context to another by readPixels -> texSubImage3D.
+         * Creates the destination texture if not provided.
+         *
+         * @param {Object} opts
+         * @param {WebGL2RenderingContext} opts.dstGL
+         * @param {WebGLTexture} opts.srcTex           - source TEXTURE_2D_ARRAY
+         * @param {WebGLTexture?} [opts.dstTex]        - optional destination TEXTURE_2D_ARRAY (created if omitted)
+         * @param {number} [opts.level=0]              - mip level to copy
+         * @param {GLenum} [opts.format=srcGL.RGBA]    - pixel format for read/upload
+         * @param {GLenum} [opts.type=srcGL.UNSIGNED_BYTE]  - pixel type for read/upload (supports srcGL.FLOAT if you have the extensions)
+         * @param {GLenum} [opts.internalFormatGuess]  - sized internal format for dst allocation (defaults to RGBA8 for UNSIGNED_BYTE, RGBA32F for FLOAT)
+         * @returns {WebGLTexture} dstTex
+         */
+        _copyTexture2DArrayBetweenContexts({ dstGL, srcTex, dstTex = null,
+               textureLayerCount, format = null, type = null, internalFormatGuess = null }) {
+            const gl = this.gl;
+            if (!(gl instanceof WebGL2RenderingContext) || !(dstGL instanceof WebGL2RenderingContext)) {
+                throw new Error('WebGL2 contexts required (texture arrays + tex(Sub)Image3D).');
+            }
+
+            // ---------- Inspect source texture dimensions ----------
+           // const srcPrevTex = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcTex);
+
+            if (format === null) {
+                format = gl.RGBA;
+            }
+            if (type === null) {
+                type = gl.UNSIGNED_BYTE;
+            }
+
+            const width  = this.canvas.width;
+            const height = this.canvas.height;
+            if (!width || !height || !textureLayerCount) {
+                // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
+                throw new Error('Source texture level has no width/height/layers (is it initialized?)');
+            }
+
+            // ---------- Create + allocate destination texture if needed ----------
+            //const dstPrevTex = dstGL.getParameter(dstGL.TEXTURE_BINDING_2D_ARRAY);
+            dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstTex);
+
+            // todo cache fb
+            const srcFB = gl.createFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, srcFB);
+
+            // ---------- Prepare source framebuffer for extraction ----------
+            // const srcPrevFB = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+
+            const layerByteLen = width * height * 4 * (type === gl.FLOAT ? 4 : 1);
+            const layerBuf = (type === gl.FLOAT) ? new Float32Array(layerByteLen / 4) : new Uint8Array(layerByteLen);
+
+            for (let z = 0; z < textureLayerCount; z++) {
+                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, srcTex, 0, z);
+                const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+                if (status !== gl.FRAMEBUFFER_COMPLETE) {
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                    gl.deleteFramebuffer(srcFB);
+                    // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
+                    // dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstPrevTex);
+                    throw new Error(`Framebuffer incomplete for source layer ${z}: 0x${status.toString(16)}`);
+                }
+
+                gl.readPixels(0, 0, width, height, format, type, layerBuf);
+                dstGL.texSubImage3D(
+                    dstGL.TEXTURE_2D_ARRAY, 0,
+                    0, 0, z,
+                    width, height, 1,
+                    format, type,
+                    layerBuf
+                );
+            }
+
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.deleteFramebuffer(srcFB);
+            // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
+            // dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstPrevTex);
+            return dstTex;
+        }
+
+        _showOffscreenMatrix(renderOutput, length, {
+            scale = 1,
+            pad = 8,
+            drawLabels = true,
+            background = '#111'
+        } = {}) {
+            // 2 columns: [Texture, Stencil], `length` rows
+            const cols = 2;
+            const rows = length;
+            const width = Math.floor(this.canvas.width);
+            const height = Math.floor(this.canvas.height);
+            const cellW = Math.floor(width * scale);
+            const cellH = Math.floor(height * scale);
+            const totalW = pad + cols * (cellW + pad);
+            const totalH = pad + rows * (cellH + pad) + (drawLabels ? 18 : 0);
+
+            const dbg = this._openDebugWindowFromUserGesture(totalW, totalH, 'Offscreen Layers (Texture | Stencil)');
+            if (!dbg) {
+                console.warn('Could not open debug window');
+                return;
+            }
+
+            const gl = this.gl;
+            const isGL2 = (gl instanceof WebGL2RenderingContext) || this.webGLVersion === "2.0";
+
+            const ctx = dbg.__debugCtx;
+            ctx.fillStyle = background;
+            ctx.fillRect(0, 0, totalW, totalH);
+            ctx.imageSmoothingEnabled = false;
+
+            // Optional headers
+            if (drawLabels) {
+                ctx.fillStyle = '#ddd';
+                ctx.font = '12px system-ui';
+                ctx.textBaseline = 'top';
+                const yLbl = 2;
+                const x0 = pad;
+                const x1 = pad + (cellW + pad);
+                ctx.fillText('Texture', x0, yLbl);
+                ctx.fillText('Stencil', x1, yLbl);
+            }
+
+            // Prepare a tiny staging canvas so we can draw the pixels into 2D easily
+            // and then scale when drawing to the popup.
+            if (!this._debugStage) {
+                this._debugStage = document.createElement('canvas');
+            }
+            const stage = this._debugStage;
+            stage.width = width;
+            stage.height = height;
+            const stageCtx = stage.getContext('2d', { willReadFrequently: true });
+
+            // One reusable buffer & ImageData to avoid reallocation per tile
+            let pixels = this._readbackBuffer;
+            if (!pixels || pixels.length !== width * height * 4) {
+                pixels = this._readbackBuffer = new Uint8ClampedArray(width * height * 4);
+            }
+            if (!this._imageData || this._imageData.width !== width || this._imageData.height !== height) {
+                this._imageData = new ImageData(width, height);
+            }
+            const imageData = this._imageData;
+
+            // Ensure we have a framebuffer to attach sources to
+            if (!this._extractionFB) {
+                this._extractionFB = gl.createFramebuffer();
+            }
+            gl.bindFramebuffer(gl.FRAMEBUFFER, this._extractionFB);
+
+            // Small helpers to attach a layer/texture
+            const attachLayer = (texArray, layerIndex) => {
+                // WebGL2 texture array
+                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, 0, layerIndex);
+            };
+            // Read helper (reuses pixels & imageData, draws into `stage`)
+            const readToStage = () => {
+                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                // Set, don’t construct: avoids allocating a new buffer every time
+                imageData.data.set(pixels);
+                stageCtx.putImageData(imageData, 0, 0);
+            };
+
+            // Iterate rows: each row = {texture i, stencil i}
+            for (let i = 0; i < length; i++) {
+                // ---- texture ----
+                if (isGL2 && renderOutput.texture /* texture array */) {
+                    attachLayer(renderOutput.texture, i);
+                } else {
+                    console.error('No valid texture binding for "texture" at index', i);
+                    continue;
+                }
+
+                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+                    console.error('Framebuffer incomplete for texture layer', i);
+                    continue;
+                }
+                readToStage();
+                // draw scaled into grid
+                const colTex = 0;
+                const xTex = pad + colTex * (cellW + pad);
+                const yBase = (drawLabels ? 18 : 0);
+                const yRow = yBase + pad + i * (cellH + pad);
+                ctx.drawImage(stage, 0, 0, width, height, xTex, yRow, cellW, cellH);
+
+                // ---- stencil ----
+                if (isGL2 && renderOutput.stencil /* texture array */) {
+                    attachLayer(renderOutput.stencil, i);
+                } else {
+                    console.error('No valid texture binding for "stencil" at index', i);
+                    continue;
+                }
+
+                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+                    console.error('Framebuffer incomplete for stencil layer', i);
+                    continue;
+                }
+                readToStage();
+                const colSt = 1;
+                const xSt = pad + colSt * (cellW + pad);
+                ctx.drawImage(stage, 0, 0, width, height, xSt, yRow, cellW, cellH);
+
+                // optional row label
+                if (drawLabels) {
+                    ctx.fillStyle = '#aaa';
+                    ctx.font = '12px system-ui';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(`#${i}`, pad, yRow - 14);
+                }
+            }
+
+            // tidy
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        }
+
+        _openDebugWindowFromUserGesture(width, height, title = 'Debug Output') {
+            const debug = this.__debugWindow;
+            if (debug && !debug.closed) {
+                return this.__debugWindow;
+            }
+
+            const features = `width=${width},height=${height}`;
+            let w = window.open('', 'osd-debug-grid', features);
+            if (!w) {
+                // Popup blocked even within gesture (some environments)
+                // Create a visible fallback button that opens it on another gesture.
+                const fallback = document.createElement('button');
+                fallback.textContent = 'Open debug window';
+                fallback.style.cssText = 'position:fixed;top: 50;left:50;inset:auto 12px 12px auto;z-index:99999';
+                fallback.onclick = () => {
+                    const w2 = window.open('', 'osd-debug-grid', features);
+                    if (w2) {
+                        this._initDebugWindow(w2, title, width, height);
+                        fallback.remove();
+                    } else {
+                        // If it still fails, there’s nothing we can do without the user changing settings
+                        alert('Please allow pop-ups for this site and click the button again.');
+                    }
+                };
+                document.body.appendChild(fallback);
+                return null;
+            }
+
+            this._initDebugWindow(w, title, width, height);
+            this.__debugWindow = w;
+            return w;
+        }
+
+        _initDebugWindow(w, title, width, height) {
+            if (w.__debugCtx) {
+                return;
+            }
+
+            w.document.title = title;
+            const style = w.document.createElement('style');
+            style.textContent = `
+    html,body{margin:0;background:#111;color:#ddd;font:12px/1.4 system-ui}
+    .head{position:fixed;inset:0 0 auto 0;background:#222;padding:6px 10px}
+    canvas{display:block;margin-top:28px}
+  `;
+            w.document.head.appendChild(style);
+
+            const head = w.document.createElement('div');
+            head.className = 'head';
+            head.textContent = title;
+            w.document.body.appendChild(head);
+
+            const cnv = w.document.createElement('canvas');
+            cnv.width = width;
+            cnv.height = height;
+            w.document.body.appendChild(cnv);
+            w.__debugCtx = cnv.getContext('2d');
         }
     };
 
@@ -677,4 +992,34 @@
          */
         destroy() {}
     };
+
+    /**
+     * Blank layer that takes almost no memory and current renderer skips it.
+     * @type {OpenSeadragon.BlankTileSource}
+     */
+    $.BlankTileSource = class extends $.TileSource {
+        supports(data, url) {
+            return data.type === "_blank" || url.type === "_blank";
+        }
+        configure(options, dataUrl, postData) {
+            return $.extend(options, {
+                width: 512,
+                height: 512,
+                _tileWidth: 512,
+                _tileHeight: 512,
+                tileSize: 512,
+                tileOverlap: 0,
+                minLevel: 0,
+                maxLevel: 0,
+                dimensions: new $.Point(512, 512),
+            });
+        }
+        downloadTileStart(context) {
+            return context.finish(undefined, undefined, "undefined");
+        }
+        getMetadata() {
+            return this;
+        }
+    };
+
 })(OpenSeadragon);

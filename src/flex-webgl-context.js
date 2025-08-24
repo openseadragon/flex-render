@@ -56,9 +56,7 @@
          * Attach shaders and link WebGLProgram, catch errors.
          * @param {WebGLProgram} program
          * @param {WebGLRenderingContext|WebGL2RenderingContext} gl
-         * @param options build options
-         * @param {String} options.vertexShader
-         * @param {String} options.fragmentShader
+         * @param {OpenSeadragon.FlexRenderer.WGLProgram} options build options
          * @param {function} onError
          * @param {boolean} debug
          * @return {boolean} true if program was built successfully
@@ -194,10 +192,14 @@
         /**
          *
          * @param context
-         * @param gl {WebGLProgram} Rendering program.
+         * @param gl {WebGLRenderingContext} Rendering program.
          */
         constructor(context, gl) {
             super(context);
+            /**
+             *
+             * @type {WebGLRenderingContext}
+             */
             this.gl = gl;
             this._webGLProgram = null;
             /**
@@ -257,8 +259,9 @@
 
         /**
          * Use program. Arbitrary arguments.
+         * @param {RenderOutput} renderOutput the object passed between first and second pass
          */
-        use() {
+        use(renderOutput) {
         }
 
         unload() {

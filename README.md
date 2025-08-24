@@ -164,6 +164,29 @@ viewer.drawer.rebuild();
 ````
 We might work on this more to simplify it.
 
+### Dealing With missing TileSources
+When you override configuration to a custom shader set, you usually rely on tiled images to be present - 
+but what some fails to load?! 
+
+You can use 
+````js
+VIEWER.addTiledImage({
+    tileSource: {type: "_blank", error: "Here goes your error detail."},
+    opacity: 0,
+    index: toOpenIndex,
+});
+````
+to render transparent placeholder data at the position of the missing tile source.
+``toOpenIndex``is the index of failed image - advised is to open all images with explicit
+index using ``addTiledImage`` to know it in advance. E.g., call this snipplet in `error` handler
+of a parent ``addTiledImage`` call. You can access the error message later as `viewer.world.getItemAt(toOpenIndex).source.error`.
+
+### Processing OffScreen
+This drawer supports off-screen processing. You can either use the renderer directly, which is a bit harder, 
+or if you want to process current viewport in a different way, you can use ``$.makeStandaloneFlexDrawer(originalViewer)``
+and then call ``offscreeDrawer.draw(originalViewer.world._items)``. The new viewer can have different shader configuration,
+rendering the same viewport in a desired manner. It's synchronized with the originalViewer data.
+
 ### Demo Playground
 Once dev dependencies are installed, you can run the demo playground to see the renderer in action:
 ```bash

@@ -33,6 +33,7 @@ module.exports = function(grunt) {
             "src/flex-webgl-context.js",
             "src/flex-webgl2.js",
             "src/flex-drawer.js",
+            "src/flex-standalone.js",
             "src/flex-layers/edgeShader.js",
             "src/flex-layers/plainShader.js",
             "src/flex-layers/heatmapShader.js"

@@ -163,13 +163,6 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
         this.textureMappingsUniformSize = 64;
     }
 
-    get webGLProgram() {
-        if (!this._webGLProgram) {
-            throw Error("Program accessed without registration - did you call this.renderer.registerProgram()?");
-        }
-        return this._webGLProgram;
-    }
-
     build(shaderMap, keyOrder) {
         if (!keyOrder.length) {
             // Todo prevent unimportant first init build call
@@ -205,7 +198,7 @@ ${shader.getFragmentShaderExecution()}
                 const shader = shaderMap[remainingBlenForShaderID];
                 // Set stencilPasses again: we are going to blend deferred data
                 return `
-    stencilPasses = texture(u_stencilTextures, vec3(v_texture_coords, float(${i}))).r > 0.95;
+    stencilPasses = osd_stencil_texture(${i}, 0, v_texture_coords).r > 0.995;
     overall_color = ${shader.mode === "show" ? "blend_source_over" : shader.uid + "_blend_func"}(intermediate_color, overall_color);
 `;
             }
@@ -238,8 +231,8 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(vec4(.0), intermediat
 
             addShaderDefinition(previousShaderLayer);
             execution += `
-    stencilPasses = texture(u_stencilTextures, vec3(v_texture_coords, float(${i}))).r > 0.95;
     instance_id = ${i};
+    stencilPasses = osd_stencil_texture(${i}, 0, v_texture_coords).r > 0.995;
     vec3 attrs_${i} = u_shaderVariables[${i}];
     opacity = attrs_${i}.x;
     pixelSize = attrs_${i}.y;
@@ -283,8 +276,8 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         const program = this.webGLProgram;
 
         // Shader element indexes match element id (instance id) to position in the texture array
-        this._instanceOffsets = gl.getUniformLocation(program, "u_instanceOffsets");
-        this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes");
+        this._instanceOffsets = gl.getUniformLocation(program, "u_instanceOffsets[0]");
+        this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes[0]");
         this._shaderVariables = gl.getUniformLocation(program, "u_shaderVariables");
 
         this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
@@ -307,7 +300,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
     /**
      * Use program. Arbitrary arguments.
      */
-    use(source, renderArray) {
+    use(renderOutput, renderArray) {
         //todo flatten render array :/
         const gl = this.gl;
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -330,16 +323,18 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         gl.uniform3fv(this._shaderVariables, shaderVariables);
 
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, source.texture);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.texture);
         gl.uniform1i(this._texturesLocation, 0);
 
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, source.stencil);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
         gl.uniform1i(this._stencilLocation, 1);
 
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.bindVertexArray(null);
+
+        return renderOutput;
     }
 
     /**
@@ -415,6 +410,12 @@ vec4 osd_texture(int index, vec2 coords) {
     return texture(u_inputTextures, vec3(coords, float(index)));
 }
 
+vec4 osd_stencil_texture(int instance, int index, vec2 coords) {
+    int offset = u_instanceOffsets[instance];
+    index = u_instanceTextureIndexes[offset + index];
+    return texture(u_stencilTextures, vec3(coords, float(index)));
+}
+
 ivec2 osd_texture_size(int index) {
     int offset = u_instanceOffsets[instance_id];
     index = u_instanceTextureIndexes[offset + index];
@@ -458,7 +459,7 @@ $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgra
         this._textureIndexes = [...Array(this._maxTextures).keys()];
         // Todo: RN we support only MAX_COLOR_ATTACHMENTS in the texture array, which varies beetween devices
         //   make the first pass shader run multiple times if the number does not suffice
-        this._maxAttachments = gl.getParameter(gl.MAX_COLOR_ATTACHMENTS);
+        // this._maxAttachments = gl.getParameter(gl.MAX_COLOR_ATTACHMENTS);
     }
 
     build(shaderMap, shaderKeys) {
@@ -623,9 +624,10 @@ void main() {
 
     /**
      * Use program. Arbitrary arguments.
+     * @param {RenderOutput} renderOutput
      * @param {FPRenderPackage[]} sourceArray
      */
-    use(sourceArray) {
+    use(renderOutput, sourceArray) {
         const gl = this.gl;
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
         gl.enable(gl.STENCIL_TEST);
@@ -724,10 +726,12 @@ void main() {
         gl.disable(gl.STENCIL_TEST);
         gl.bindVertexArray(null);
 
-        return {
-            texture: this.fpTexture,
-            stencil: this.fpTextureClip
-        };
+        if (!renderOutput) {
+            renderOutput = {};
+        }
+        renderOutput.texture = this.fpTexture;
+        renderOutput.stencil = this.fpTextureClip;
+        return renderOutput;
     }
 
     unload() {
@@ -736,10 +740,10 @@ void main() {
     setDimensions(x, y, width, height, dataLayerCount) {
         // Double swapping required else collisions
         this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR);
-        this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
+        // this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
         this._createOffscreenTexture("stencilTextureA", width, height, dataLayerCount, this.gl.LINEAR);
-        this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
+        // this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
         const gl  = this.gl;
         if (this.stencilClipBuffer) {
@@ -763,12 +767,11 @@ void main() {
         this.colorTextureA = null;
         gl.deleteTexture(this.stencilTextureA);
         this.stencilTextureA = null;
-        gl.deleteTexture(this.colorTextureB);
-        this.colorTextureB = null;
-        gl.deleteTexture(this.stencilTextureB);
-        this.stencilTextureB = null;
+        // gl.deleteTexture(this.colorTextureB);
+        // this.colorTextureB = null;
+        // gl.deleteTexture(this.stencilTextureB);
+        // this.stencilTextureB = null;
 
-        gl.deleteBuffer(gl.createRenderbuffer());
         this.stencilClipBuffer = null;
 
         gl.deleteVertexArray(this.firstPassVao);

@@ -1,6 +1,6 @@
 //! openseadragon 5.0.1
-//! Built on 2025-08-20
-//! Git commit: v3.0.0-1081-951143a5-dirty
+//! Built on 2025-08-23
+//! Git commit: v3.0.0-1083-a6c940c2-dirty
 //! http://openseadragon.github.io
 //! License: http://openseadragon.github.io/license/
 
@@ -22028,9 +22028,14 @@ $.Tile.prototype = {
  *   of formats the drawer declares as supported. This method must return object to be used during drawing.
  *   You should probably implement also internalCacheFree() to provide cleanup logics.
  *
- * @property {boolean} [preloadCache=true]
- *  When internalCacheCreate is used, it can be applied offline (asynchronously) during data processing = preloading,
- *  or just in time before rendering (if necessary). Preloading supports
+ * @property {boolean} [preloadCache=true] When internalCacheCreate is used, it can be applied offline
+ *   (asynchronously) during data processing = preloading, or just in time before rendering (if necessary).
+ *   Preloading supports
+ *
+ * @property {boolean} [offScreen=false] When true, the drawer is not attached to DOM. This must be false
+ *   for all drawers created and used for rendering, particularly the main viewer drawer. However,
+ *   if you need to use particular viewer API for rendering an offscreen images for further processing,
+ *   you can set this to true.
  */
 
 const OpenSeadragon = $; // (re)alias back to OpenSeadragon for JSDoc
@@ -22060,25 +22065,26 @@ OpenSeadragon.DrawerBase = class DrawerBase{
 
         this._renderingTarget = this._createDrawingElement();
 
+        if (!this.options.offScreen) {
+            this.canvas.style.width     = "100%";
+            this.canvas.style.height    = "100%";
+            this.canvas.style.position  = "absolute";
+            // set canvas.style.left = 0 so the canvas is positioned properly in ltr and rtl html
+            this.canvas.style.left = "0";
+            $.setElementOpacity( this.canvas, this.viewer.opacity, true );
 
-        this.canvas.style.width     = "100%";
-        this.canvas.style.height    = "100%";
-        this.canvas.style.position  = "absolute";
-        // set canvas.style.left = 0 so the canvas is positioned properly in ltr and rtl html
-        this.canvas.style.left = "0";
-        $.setElementOpacity( this.canvas, this.viewer.opacity, true );
+            // Allow pointer events to pass through the canvas element so implicit
+            //   pointer capture works on touch devices
+            $.setElementPointerEventsNone( this.canvas );
+            $.setElementTouchActionNone( this.canvas );
 
-        // Allow pointer events to pass through the canvas element so implicit
-        //   pointer capture works on touch devices
-        $.setElementPointerEventsNone( this.canvas );
-        $.setElementTouchActionNone( this.canvas );
-
-        // explicit left-align
-        this.container.style.textAlign = "left";
-        this.container.appendChild( this.canvas );
+            // explicit left-align
+            this.container.style.textAlign = "left";
+            this.container.appendChild( this.canvas );
+        }
 
         this._checkInterfaceImplementation();
-        this.setInternalCacheNeedsRefresh();  // initializes stamp
+        this.setInternalCacheNeedsRefresh();  // initializes timestamp
     }
 
     /**
@@ -22092,6 +22098,7 @@ OpenSeadragon.DrawerBase = class DrawerBase{
         return {
             usePrivateCache: false,
             preloadCache: true,
+            offScreen: false
         };
     }
 
@@ -30970,12 +30977,11 @@ $.extend( $.World.prototype, $.EventSource.prototype, /** @lends OpenSeadragon.W
     requestInvalidate: function (restoreTiles = true, tStamp = $.now()) {
         $.__updated = tStamp;
 
+        // Find the earliest needed timestamp
         let drawnTstamp = Infinity;
         for (let item of this._items) {
-            // Find the earliest needed timestamp
-            for (let tile of item._lastDrawn) {
-                drawnTstamp = Math.min(drawnTstamp, tile.tile.lastTouchTime);
-                break;
+            if (item._lastDrawn.length) {
+                drawnTstamp = Math.min(drawnTstamp, item._lastDrawn[0].tile.lastTouchTime);
             }
         }
 
