@@ -95,7 +95,7 @@
             // todo reset also when reordering tiled images!
             // or we could change order only
 
-            if (this.options.handleNavigator && !this._isNavigatorDrawer && this.viewer.navigator) {
+            if (this.options.handleNavigator && this.viewer.navigator) {
                 this.viewer.navigator.drawer.overrideConfigureAll(shaders, shaderOrder);
             }
 
@@ -153,7 +153,7 @@
                 this.tiledImageCreated(tiledImage);
             }
 
-            if (this.options.handleNavigator && !this._isNavigatorDrawer && this.viewer.navigator) {
+            if (this.options.handleNavigator && this.viewer.navigator) {
                 const nav = this.viewer.navigator;
                 let tiledImageNavigator = null;
                 for (let i = 0; i < nav.world.getItemCount(); i++) {
@@ -268,6 +268,9 @@
          * @return {Promise}
          */
         rebuild() {
+            if (this.options.handleNavigator) {
+                this.viewer.navigator.drawer.rebuild();
+            }
             return this._requestRebuild();
         }
 
@@ -684,6 +687,7 @@
             this._isNavigatorDrawer = !!this.viewer.viewer;
             if (this._isNavigatorDrawer) {
                 this.options.debug = false;
+                this.options.handleNavigator = false;
             }
 
             // todo better handling, build-in ID does not comply to syntax... :/

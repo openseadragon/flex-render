@@ -115,7 +115,6 @@
             this.__shaderConfig = privateOptions.shaderConfig;
             this.webglContext = privateOptions.webglContext;
             this._interactive = privateOptions.interactive;
-            this._cache = privateOptions.cache ? privateOptions.cache : {};
             this._customControls = privateOptions.params ? privateOptions.params : {};
 
 
@@ -402,6 +401,14 @@
         destroy() {
         }
 
+        /**
+         * Proxy cache to the config object. The config object stores the cached values, which keeps consistent state.
+         * @return {Object}
+         */
+        get cache() {
+            return this.__shaderConfig.cache;
+        }
+
         // CACHE LOGIC
         /**
          * Load value from the cache, return default value if not found.
@@ -411,7 +418,7 @@
          * @return {String}
          */
         loadProperty(name, defaultValue) {
-            const value = this._cache[name];
+            const value = this.cache[name];
             return value !== undefined ? value : defaultValue;
         }
 
@@ -421,10 +428,8 @@
          * @param {String} value
          */
         storeProperty(name, value) {
-            this._cache[name] = value;
+            this.cache[name] = value;
         }
-
-
 
         // TEXTURE SAMPLING LOGIC
         /**

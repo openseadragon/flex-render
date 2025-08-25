@@ -9,7 +9,7 @@
      * @property {Object} shaderConfig.params          settings for the ShaderLayer
      * @property {OpenSeadragon.TiledImage[]|number[]} tiledImages images that provide the data
      * @property {Object} shaderConfig._controls       storage for the ShaderLayer's controls
-     * @property {Object} shaderConfig._cache          cache object used by the ShaderLayer's controls
+     * @property {Object} shaderConfig.cache          cache object used by the ShaderLayer's controls
      */
 
     /**
@@ -433,7 +433,6 @@
                 shaderConfig: shaderConfig,
                 webglContext: this.webglContext,
                 controls: shaderConfig._controls,
-                cache: shaderConfig._cache,
                 params: shaderConfig.params,
                 interactive: this.interactive,
 
@@ -1015,10 +1014,13 @@
             });
         }
         downloadTileStart(context) {
-            return context.finish(undefined, undefined, "undefined");
+            return context.finish("_blank", undefined, "undefined");
         }
         getMetadata() {
             return this;
+        }
+        getTileUrl(level, x, y) {
+            return "_blank";
         }
     };
 
