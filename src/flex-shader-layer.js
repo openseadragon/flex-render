@@ -93,9 +93,7 @@
          * @param {Object} privateOptions
          * @param {Object} privateOptions.shaderConfig              object bind with this ShaderLayer
          * @param {WebGLImplementation} privateOptions.webglContext
-         * @param {Object} privateOptions.controls
          * @param {Object} privateOptions.cache
-         *
          * @param {Function} privateOptions.invalidate  // callback to re-render the viewport
          * @param {Function} privateOptions.rebuild     // callback to rebuild the WebGL program
          * @param {Function} privateOptions.refetch     // callback to reinitialize the whole WebGLDrawer; NOT USED

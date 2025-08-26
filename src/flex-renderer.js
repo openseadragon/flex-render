@@ -432,7 +432,6 @@
             const shader = new Shader(id, {
                 shaderConfig: shaderConfig,
                 webglContext: this.webglContext,
-                controls: shaderConfig._controls,
                 params: shaderConfig.params,
                 interactive: this.interactive,
 
