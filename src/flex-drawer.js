@@ -34,7 +34,7 @@
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
             // We have 'undefined' extra format for blank tiles
-            this._supportedFormats = ["rasterBlob", "context2d", "image", "undefined"];
+            this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "undefined"];
             this.rebuildCounter = 0;
 
             // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
@@ -453,6 +453,7 @@
             for (let tiledImageIndex = 0; tiledImageIndex < tiledImages.length; tiledImageIndex++) {
                 const tiledImage = tiledImages[tiledImageIndex];
                 const payload = [];
+                const vecPayload = [];
 
                 const tilesToDraw = tiledImage.getTilesToDraw();
 
@@ -486,13 +487,26 @@
                             //TODO consider drawing some error if the tile is in erroneous state
                             continue;
                         }
-                        payload.push({
-                            transformMatrix: this._updateTileMatrix(tileInfo, tile, tiledImage, overallMatrix),
-                            dataIndex: tiledImageIndex,
-                            texture: tileInfo.texture,
-                            position: tileInfo.position,
-                            tile: tile
-                        });
+                        const transformMatrix = this._updateTileMatrix(tileInfo, tile, tiledImage, overallMatrix);
+                        if (tileInfo.texture) {
+                            payload.push({
+                                transformMatrix,
+                                dataIndex: tiledImageIndex,
+                                texture: tileInfo.texture,
+                                position: tileInfo.position,
+                                tile: tile
+                            });
+                        } else if (tileInfo.vectors) {
+                            // Flatten fill + line meshes into a simple draw list
+
+                            if (tileInfo.vectors.fills) {
+                                tileInfo.vectors.fills.matrix = transformMatrix;
+                            }
+                            if (tileInfo.vectors.lines) {
+                                tileInfo.vectors.lines.matrix = transformMatrix;
+                            }
+                            vecPayload.push(tileInfo.vectors);
+                        }
                     }
                 }
 
@@ -522,6 +536,7 @@
 
                 TI_PAYLOAD.push({
                     tiles: payload,
+                    vectors: vecPayload,
                     polygons: polygons,
                     dataIndex: tiledImageIndex,
                     _temp: overallMatrix, // todo dirty
@@ -726,7 +741,6 @@
             let viewportSize = this._calculateCanvasSize();
 
             // SETUP CANVASES
-            this._size = new $.Point(viewportSize.x, viewportSize.y); // current viewport size, changed during resize event
             this._gl = this.renderer.gl;
             this._setupCanvases();
 
@@ -765,6 +779,106 @@
             if (data instanceof CanvasRenderingContext2D) {
                 data = data.canvas;
             }
+
+            // NEW: vector geometry path (pre-tessellated triangles in tile UV space 0..1)
+            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines))) {
+                const tileInfo = { texture: null, position: null, vectors: {} };
+
+                const buildBatch = (meshes) => {
+                    // Count totals
+                    let vCount = 0,
+                        iCount = 0;
+                    for (const m of meshes) {
+                        vCount += (m.vertices.length / 2);
+                        iCount += m.indices.length;
+                    }
+
+                    // Allocate batched arrays
+                    const positions = new Float32Array(vCount * 2);
+                    const colors    = new Uint8Array(vCount * 4);  // normalized RGBA
+                    const indices   = new Uint32Array(iCount);
+
+                    // Fill them
+                    let vOfs = 0,
+                        iOfs = 0,
+                        baseVertex = 0;
+                    for (const m of meshes) {
+                        positions.set(m.vertices, vOfs * 2);
+
+                        // fill color per-vertex (constant per feature)
+                        const rgba = m.color ? m.color : [0, 0, 0, 1];
+                        const r = Math.max(0, Math.min(255, Math.round(rgba[0] * 255)));
+                        const g = Math.max(0, Math.min(255, Math.round(rgba[1] * 255)));
+                        const b = Math.max(0, Math.min(255, Math.round(rgba[2] * 255)));
+                        const a = Math.max(0, Math.min(255, Math.round(rgba[3] * 255)));
+                        for (let k = 0; k < (m.vertices.length / 2); k++) {
+                            const cOfs = (vOfs + k) * 4;
+                            colors[cOfs + 0] = r;
+                            colors[cOfs + 1] = g;
+                            colors[cOfs + 2] = b;
+                            colors[cOfs + 3] = a;
+                        }
+
+                        // rebase indices
+                        for (let k = 0; k < m.indices.length; k++) {
+                            indices[iOfs + k] = baseVertex + m.indices[k];
+                        }
+
+                        vOfs += (m.vertices.length / 2);
+                        iOfs += m.indices.length;
+                        baseVertex += (m.vertices.length / 2);
+                    }
+
+                    // Upload once
+                    const vboPos = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
+                    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+                    const vboCol = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
+                    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+
+                    const ibo = gl.createBuffer();
+                    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+                    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+                    return { vboPos, vboCol, ibo, count: indices.length };
+                };
+
+                if (data.fills && data.fills.length) {
+                    tileInfo.vectors.fills = buildBatch(data.fills);
+                }
+                if (data.lines && data.lines.length) {
+                    tileInfo.vectors.lines = buildBatch(data.lines);
+                }
+
+                return Promise.resolve(tileInfo);
+            }
+
+
+            // if (cache.type === "vector-mesh") {
+            //     // We keep per-primitive VBOs so first pass can draw them without re-uploading every frame
+            //     const tileInfo = { texture: null, position: null, vectors: [] };
+            //
+            //     const meshes = Array.isArray(data.meshes) ? data.meshes : [];
+            //     for (const m of meshes) {
+            //         const positions = (m && m.positions) instanceof Float32Array ? m.positions : null;
+            //         if (!positions || positions.length === 0) continue;
+            //
+            //         const color = m.color && m.color.length === 4 ? m.color : [1, 0, 0, 1]; // default red
+            //
+            //         const vbo = gl.createBuffer();
+            //         gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+            //         gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+            //         tileInfo.vectors.push({
+            //             buffer: vbo,
+            //             count: positions.length / 2,
+            //             color: new Float32Array(color)
+            //         });
+            //     }
+            //
+            //     return Promise.resolve(tileInfo);
+            // }
 
             return createImageBitmap(data).then(data => {
                 // if (!tiledImage.isTainted()) {
@@ -812,6 +926,7 @@
                 const tileInfo = {
                     position: position,
                     texture: null,
+                    vectors: undefined,
                 };
 
                 try {
@@ -858,10 +973,34 @@
             });
         }
 
+        // internalCacheFree(data) {
+        //     if (data && data.texture) {
+        //         this._gl.deleteTexture(data.texture);
+        //         data.texture = null;
+        //     }
+        // }
+
         internalCacheFree(data) {
-            if (data && data.texture) {
+            if (!data) {
+                return;
+            }
+            if (data.texture) {
                 this._gl.deleteTexture(data.texture);
                 data.texture = null;
+            }
+            if (data.vectors) {
+                const gl = this._gl;
+                if (data.vectors.fills) {
+                    gl.deleteBuffer(data.vectors.fills.vboPos);
+                    gl.deleteBuffer(data.vectors.fills.vboCol);
+                    gl.deleteBuffer(data.vectors.fills.ibo);
+                }
+                if (data.vectors.lines) {
+                    gl.deleteBuffer(data.vectors.lines.vboPos);
+                    gl.deleteBuffer(data.vectors.lines.vboCol);
+                    gl.deleteBuffer(data.vectors.lines.ibo);
+                }
+                data.vectors = null;
             }
         }
 

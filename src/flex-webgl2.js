@@ -469,11 +469,14 @@ precision mediump float;
 
 layout(location = 0) in mat3 a_transform_matrix;
 layout(location = 4) in vec2 a_texture_coords;
+layout(location = 5) in vec4 a_vecColor;
 
 uniform vec2 u_renderClippingParams;
+uniform mat3 u_geomMatrix;
 
 out vec2 v_texture_coords;
 flat out int instance_id;
+out vec4 v_vecColor;
 
 const vec3 viewport[4] = vec3[4] (
     vec3(0.0, 1.0, 1.0),
@@ -487,9 +490,13 @@ in vec2 a_positions;
 void main() {
     v_texture_coords = a_texture_coords;
 
+    mat3 matrix = u_renderClippingParams.y > 0.5 ? u_geomMatrix : a_transform_matrix;
+
     vec3 space_2d = u_renderClippingParams.x > 0.5 ?
-        a_transform_matrix * vec3(a_positions, 1.0) :
-        a_transform_matrix * viewport[gl_VertexID];
+        matrix * vec3(a_positions, 1.0) :
+        matrix * viewport[gl_VertexID];
+
+    v_vecColor = a_vecColor;
 
     gl_Position = vec4(space_2d.xy, 1.0, space_2d.z);
     instance_id = gl_InstanceID;
@@ -504,6 +511,7 @@ uniform vec2 u_renderClippingParams;
 
 flat in int instance_id;
 in vec2 v_texture_coords;
+in vec4 v_vecColor;
 uniform sampler2D u_textures[${this._maxTextures}];
 
 layout(location=0) out vec4 outputColor;
@@ -523,6 +531,13 @@ void main() {
             }
         }
         outputStencil = 1.0;
+    } else if (u_renderClippingParams.y > 0.5) {
+        // Vector geometry draw path (per-vertex color)
+        outputColor = v_vecColor;
+        outputStencil = 1.0;
+    } else {
+        // Pure clipping path: write only to stencil (color target value is undefined)
+        outputColor = vec4(0.0);
     }
 }
 `;
@@ -545,13 +560,34 @@ void main() {
             this.matrixBufferClip = gl.createBuffer();
             this.firstPassVaoClip = gl.createVertexArray();
             this.positionsBufferClip = gl.createBuffer();
+
+            this.firstPassVaoGeom = gl.createVertexArray();
+            this.positionsBufferGeom = gl.createBuffer();
         }
 
         // Texture locations are 0->N uniform indexes, we do not load the data here yet as vao does not store them
         this._inputTexturesLoc = gl.getUniformLocation(program, "u_textures");
         this._renderClipping = gl.getUniformLocation(program, "u_renderClippingParams");
 
-        // Setup all rendering props once beforehand
+
+        // Setup all rendering props once beforehand: geometry
+        gl.bindVertexArray(this.firstPassVaoGeom);
+        // Colors for geometry
+        this._colorAttrib = 5; // matches 'layout(location=5)'
+        gl.enableVertexAttribArray(this._colorAttrib);
+        gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+
+        // a_positions (dynamic buffer, we may re-bind/retarget per primitive)
+        this._positionsBuffer = gl.getAttribLocation(program, "a_positions");
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionsBufferGeom);
+        gl.enableVertexAttribArray(this._positionsBuffer);
+        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+        this._geomSingleMatrix = gl.getUniformLocation(program, "u_geomMatrix");
+
+
+
+
+        // Setup all rendering props once beforehand: raster
         gl.bindVertexArray(vao);
         // Texture coords are vec2 * 4 coords for the textures, needs to be passed since textures can have offset
         this._texCoordsBuffer = gl.getAttribLocation(program, "a_texture_coords");
@@ -559,18 +595,17 @@ void main() {
         gl.enableVertexAttribArray(this._texCoordsBuffer);
         gl.vertexAttribPointer(this._texCoordsBuffer, 2, gl.FLOAT, false, 0, 0);
         gl.vertexAttribDivisor(this._texCoordsBuffer, 0);
-
         // We call bufferData once, then we just call subData
         const maxTexCoordBytes = this._maxTextures * 8 * Float32Array.BYTES_PER_ELEMENT;
         gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, maxTexCoordBytes, gl.DYNAMIC_DRAW);
-
         // To be able to use the clipping along with tile render, we pass points explicitly
         this._positionsBuffer = gl.getAttribLocation(program, "a_positions");
-
         // Matrices position tiles, 3*3 matrix per tile sent as 3 attributes in
+        // Share the same per-instance transform setup as the raster VAO
         this._matrixBuffer = gl.getAttribLocation(program, "a_transform_matrix");
         const matLoc = this._matrixBuffer;
+        const maxMatrixBytes = this._maxTextures * 9 * Float32Array.BYTES_PER_ELEMENT;
         gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
         gl.enableVertexAttribArray(matLoc);
         gl.enableVertexAttribArray(matLoc + 1);
@@ -582,7 +617,6 @@ void main() {
         gl.vertexAttribDivisor(matLoc + 1, 1);
         gl.vertexAttribDivisor(matLoc + 2, 1);
         // We call bufferData once, then we just call subData
-        const maxMatrixBytes = this._maxTextures * 9 * Float32Array.BYTES_PER_ELEMENT;
         gl.bufferData(gl.ARRAY_BUFFER, maxMatrixBytes, gl.STREAM_DRAW);
 
 
@@ -648,7 +682,7 @@ void main() {
         let wasClipping = true; // force first init (~ as if was clipping was true)
 
         for (const renderInfo of sourceArray) {
-            const source = renderInfo.tiles;
+            const rasterTiles = renderInfo.tiles;
             const attachments = [];
             // for (let i = 0; i < 1; i++) {
                 gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
@@ -692,32 +726,80 @@ void main() {
                 wasClipping = false;
             }
 
-            // Then draw join tiles
-            gl.bindVertexArray(this.firstPassVao);
-            const tileCount = source.length;
-            let currentIndex = 0;
+            const tileCount = rasterTiles.length;
+            if (tileCount) {
+                // Then draw join tiles
+                gl.bindVertexArray(this.firstPassVao);
+                let currentIndex = 0;
+                while (currentIndex < tileCount) {
+                    const batchSize = Math.min(this._maxTextures, tileCount - currentIndex);
 
-            while (currentIndex < tileCount) {
-                const batchSize = Math.min(this._maxTextures, tileCount - currentIndex);
+                    for (let i = 0; i < batchSize; i++) {
+                        const tile = rasterTiles[currentIndex + i];
 
-                for (let i = 0; i < batchSize; i++) {
-                    const tile = source[currentIndex + i];
+                        gl.activeTexture(gl.TEXTURE0 + i);
+                        gl.bindTexture(gl.TEXTURE_2D, tile.texture);
 
-                    gl.activeTexture(gl.TEXTURE0 + i);
-                    gl.bindTexture(gl.TEXTURE_2D, tile.texture);
+                        this._tempMatrixData.set(tile.transformMatrix, i * 9);
+                        this._tempTexCoords.set(tile.position, i * 8);
+                    }
 
-                    this._tempMatrixData.set(tile.transformMatrix, i * 9);
-                    this._tempTexCoords.set(tile.position, i * 8);
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempTexCoords.subarray(0, batchSize * 8));
+
+                    gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempMatrixData.subarray(0, batchSize * 9));
+
+                    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, batchSize);
+                    currentIndex += batchSize;
                 }
+            }
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordsBuffer);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempTexCoords.subarray(0, batchSize * 8));
+            const vectors = renderInfo.vectors;
+            if (vectors) {
+                // Signal geometry branch in shader
+                gl.uniform2f(this._renderClipping, 1, 1);
+                gl.bindVertexArray(this.firstPassVaoGeom);
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.matrixBuffer);
-                gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._tempMatrixData.subarray(0, batchSize * 9));
+                for (let vectorTile of vectors) {
+                    let batch = vectorTile.fills;
+                    if (batch) {
+                        // Upload per-tile transform matrix (we draw exactly 1 instance)
+                        gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
 
-                gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, batchSize);
-                currentIndex += batchSize;
+                        // Bind positions
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+
+                        // Bind per-vertex colors (normalized u8 → float 0..1)
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
+                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+
+                        // Bind indices and draw one instance
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                    }
+
+                    batch = vectorTile.lines;
+                    if (batch) {
+                        if (!vectorTile.fills) {
+                            gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
+                        }
+
+                        // Bind positions
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+
+                        // Bind per-vertex colors (normalized u8 → float 0..1)
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
+                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+
+                        // Bind indices and draw one instance
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                    }
+                }
+                gl.uniform2f(this._renderClipping, 0, 0);
             }
 
             this._renderOffset++;
@@ -771,6 +853,12 @@ void main() {
         // this.colorTextureB = null;
         // gl.deleteTexture(this.stencilTextureB);
         // this.stencilTextureB = null;
+
+        gl.deleteVertexArray(this.firstPassVaoGeom);
+        gl.deleteBuffer(this.positionsBufferGeom);
+        this.firstPassVaoGeom = null;
+        this.positionsBufferGeom = null;
+        this.matrixBufferGeom = null;
 
         this.stencilClipBuffer = null;
 
