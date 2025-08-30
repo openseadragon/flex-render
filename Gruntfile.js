@@ -38,12 +38,17 @@ module.exports = function(grunt) {
             "src/flex-layers/plainShader.js",
             "src/flex-layers/heatmapShader.js",
             "src/mvt-tile-source.js",
+            "src/fabric-tile-source.js",
         ],
-        workerParts = [
+        mvtWorkerDeps = [
             "src/vendor/pbf.min.js",
             "src/vendor/vector-tile.min.js",
             "src/vendor/earcut.min.js",
             "src/workers/mvt-worker.core.js"
+        ],
+        fabricWorkerDeps = [
+            "src/vendor/earcut.min.js",
+            "src/workers/fabric-worker.core.js"
         ];
 
     const banner = "//! <%= pkg.name %> <%= pkg.version %>\n" +
@@ -89,12 +94,12 @@ module.exports = function(grunt) {
                 sourceMap: true,
                 process: true
             },
-            worker: {
+            mvtWorkerPre: {
                 options: { sourceMap: false, banner: "" },
-                src: workerParts,
+                src: mvtWorkerDeps,
                 dest: "build/openseadragon/mvt-worker.js"
             },
-            workerInline: {
+            mvtWorkerPost: {
                 options: {
                     process: function (content/*, srcPath*/) {
                         // Escape backticks and ${ in template literals
@@ -115,10 +120,37 @@ module.exports = function(grunt) {
                 src: ["build/openseadragon/mvt-worker.js"],
                 dest: "build/openseadragon/mvt-worker.inline.js"
             },
+            fabricWorkerPre: {
+                options: { sourceMap: false, banner: "" },
+                src: fabricWorkerDeps,
+                dest: "build/openseadragon/fabric-worker.js"
+            },
+            fabricWorkerPost: {
+                options: {
+                    process: function (content/*, srcPath*/) {
+                        // Escape backticks and ${ in template literals
+                        const esc = content
+                            .replace(/`/g, "\\`")
+                            .replace(/\$\{/g, "\\${");
+                        return [
+                            "(function(root){",
+                            "  root.OpenSeadragon = root.OpenSeadragon || {};",
+                            "  // Full inlined worker source (libs + core)",
+                            "  root.OpenSeadragon.__FABRIC_WORKER_SOURCE__ = `",
+                            esc,
+                            "`;",
+                            "})(typeof self !== 'undefined' ? self : window);"
+                        ].join("\n");
+                    }
+                },
+                src: ["build/openseadragon/fabric-worker.js"],
+                dest: "build/openseadragon/fabric-worker.inline.js"
+            },
             dist: {
                 // keep your existing dist concat; just ensure the inline is appended:
                 src: ["<banner>"].concat(sources).concat([
-                    "build/openseadragon/mvt-worker.inline.js"
+                    "build/openseadragon/mvt-worker.inline.js",
+                    "build/openseadragon/fabric-worker.inline.js"
                 ]),
                 dest: distribution
             }
@@ -323,7 +355,8 @@ module.exports = function(grunt) {
     // Cleans out the build folder and builds the code and images into it, checking lint.
     grunt.registerTask("build", [
         "clean:build", "git-describe", "eslint",
-        "concat:worker", "concat:workerInline",
+        "concat:mvtWorkerPre", "concat:mvtWorkerPost",
+        "concat:fabricWorkerPre", "concat:fabricWorkerPost",
         "concat:dist", "uglify",
         "replace:cleanPaths"
     ]);

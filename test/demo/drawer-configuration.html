@@ -32,7 +32,6 @@
             padding:0;
             margin:0;
         }
-
         .image-options{
             display: grid;
             grid-template-columns: 2em 9em 1fr;
@@ -56,9 +55,14 @@
     <div class="content">
 
         <h2>Compare behavior of <strong>Context2d</strong> and <strong>WebGL</strong> drawers</h2>
-        <div>
-            <h3 id="title-w">Loading...</h3>
-            <div id="drawer-canvas" class="viewer-container"></div>
+        <div style="display: flex; flex-direction: row; flex-wrap: wrap;">
+            <section style="flex: auto">
+                <h3 id="title-w">Loading...</h3>
+                <div id="drawer-canvas" class="viewer-container"></div>
+            </section>
+            <section id="my-shader-ui-container" style="width: 300px; padding: 10px; border: 1px solid #ccc; margin-left: 20px;">
+                <h2>Shader Layer Controls</h2>
+            </section>
         </div>
 
 
@@ -77,8 +81,6 @@
             </form>
         </div>
     </div>
-
-
 
 </body>
 </html>

@@ -6,6 +6,7 @@ const sources = {
         url: "../data/BBlue.png",
     },
     "duomo":"https://openseadragon.github.io/example-images/duomo/duomo.dzi",
+    "fabricGeometry": "../data/fabric.geometry.json",
     "japan":"http://localhost:8888/data/v3.json"
 }
 const labels = {
@@ -13,6 +14,7 @@ const labels = {
     leaves: 'Leaves',
     bblue: 'Blue B',
     duomo: 'Duomo',
+    fabricGeometry: 'Fabric Geometry',
     japan: 'Japan'
 }
 const drawers = {
@@ -26,8 +28,28 @@ const drawer = "flex-renderer"
 const selectedWebglVersion = url.searchParams.get("webgl-version") || "2.0";
 const drawerOptions = {
     "flex-renderer": {
-        debug: true,
-        webGLPreferredVersion: selectedWebglVersion
+        debug: false,
+        webGLPreferredVersion: selectedWebglVersion,
+        htmlHandler: (shaderLayer, shaderConfig) => {
+            const container = document.getElementById('my-shader-ui-container');
+            // Be careful, shaderLayer.id is changing. It should not be used as a key to identify the layer between
+            // different programs such as in this case, but it's okay to use it when referencing concrete running layer.
+
+            // Create custom layer controls - you can add more HTML controls allowing users to
+            // control gamma, blending, or even change the shader type. Here we just show shader layer name + checkbox representing
+            // its visibility (but we do not manage change event and thus users cannot change it). In case of error, we show
+            // the error message below the checkbox.
+            // The compulsory step is to include `shaderLayer.htmlControls()` output.
+            container.insertAdjacentHTML('beforeend', `<div>
+    <input type="checkbox" disabled id="enable-layer-${shaderLayer.id}" ${shaderConfig.visible ? 'checked' : ''}><span>${shaderConfig.name || shaderConfig.type}</span>
+    <div>${shaderLayer.error || ""}</div>
+    ${shaderLayer.htmlControls()}
+</div>`);
+        },
+        htmlReset: () => {
+            const container = document.getElementById('my-shader-ui-container');
+            container.innerHTML = '';
+        }
     }
 }
 

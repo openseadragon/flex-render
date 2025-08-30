@@ -756,7 +756,7 @@ void main() {
             }
 
             const vectors = renderInfo.vectors;
-            if (vectors) {
+            if (vectors && vectors.length) {
                 // Signal geometry branch in shader
                 gl.uniform2f(this._renderClipping, 1, 1);
                 gl.bindVertexArray(this.firstPassVaoGeom);
