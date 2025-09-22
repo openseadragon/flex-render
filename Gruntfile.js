@@ -28,8 +28,10 @@ module.exports = function(grunt) {
         coverageDir = 'coverage/' + dateFormat(new Date(), 'yyyymmdd-HHMMss'),
         sources = [
             "src/flex-renderer.js",
+            "src/colormaps.js",
             "src/flex-shader-layer.js",
-            "src/flex-shader-controls.js",
+            "src/flex-controls/basic-controls.js",
+            "src/flex-controls/advanced-controls.js",
             "src/flex-webgl-context.js",
             "src/flex-webgl2.js",
             "src/flex-drawer.js",

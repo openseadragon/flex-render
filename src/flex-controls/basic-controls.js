@@ -128,7 +128,7 @@
          * Register simple UI element by providing necessary object
          * implementation:
          *  { defaults: function() {...}, // object with all default values for all supported parameters
-             html: function(uniqueId, params, css="") {...}, //how the HTML UI controls look like
+             html: function(uniqueId, params, classes="", css="") {...}, //how the HTML UI controls look like
             glUniformFunName: function() {...}, //what function webGL uses to pass this attribute to GPU
             decode: function(fromValue) {...}, //parse value obtained from HTML controls into something
                                                     gl[glUniformFunName()](...) can pass to GPU
@@ -190,9 +190,9 @@
                 return {title: "Number", interactive: true, default: 0, min: 0, max: 100, step: 1};
             },
             // returns string corresponding to html code for injection
-            html: function(uniqueId, params, css = "") {
+            html: function(uniqueId, params, classes = "", css = "") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input class="form-control input-sm" style="${css}" min="${params.min}" max="${params.max}"
+                return `${title}<input class="${classes}" style="${css}" min="${params.min}" max="${params.max}"
     step="${params.step}" type="number" id="${uniqueId}">`;
             },
             glUniformFunName: function() {
@@ -215,10 +215,10 @@
             defaults: function() {
                 return {title: "Range", interactive: true, default: 0, min: 0, max: 100, step: 1};
             },
-            html: function(uniqueId, params, css = "") {
+            html: function(uniqueId, params, classes = "", css = "") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 return `${title}<input type="range" style="${css}"
-    class="with-direct-input" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
+    class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
             },
             glUniformFunName: function() {
                 return "uniform1f";
@@ -240,9 +240,9 @@
             defaults: function() {
                 return { title: "Color", interactive: true, default: "#fff900" };
             },
-            html: function(uniqueId, params, css = "") {
+            html: function(uniqueId, params, classes = "", css = "") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
-                return `${title}<input type="color" id="${uniqueId}" style="${css}" class="form-control input-sm">`;
+                return `${title}<input type="color" id="${uniqueId}" style="${css}" class="${classes}">`;
             },
             glUniformFunName: function() {
                 return "uniform3fv";
@@ -273,12 +273,12 @@
             defaults: function() {
                 return { title: "Checkbox", interactive: true, default: true };
             },
-            html: function(uniqueId, params, css = "") {
+            html: function(uniqueId, params, classes = "", css = "") {
                 let title = params.title ? `<span> ${params.title}</span>` : "";
                 let value = this.decode(params.default) ? "checked" : "";
                 //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
                 return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
-    class="form-control input-sm" onchange="this.value=this.checked; return true;">`;
+    class="${classes}" onchange="this.value=this.checked; return true;">`;
             },
             glUniformFunName: function() {
                 return "uniform1i";
@@ -309,17 +309,17 @@
 
         /**
          * Sets common properties needed to create the controls:
-         *  this.context @extends FlexRenderer.ShaderLayer - owner context
-         *  this.name - name of the parameter for this.context.[load/store]Property(...) call
+         *  this.owner @extends FlexRenderer.ShaderLayer - owner
+         *  this.name - name of the parameter for this.owner.[load/store]Property(...) call
          *  this.id - unique ID for HTML id attribute, to be able to locate controls in DOM,
-         *      created as ${uniq}${name}-${context.uid}
+         *      created as ${uniq}${name}-${owner.uid}
          *  this.webGLVariableName - unique webgl uniform variable name, to not to cause conflicts
          *
          * If extended (class-based definition, see registerCass) children should define constructor as
          *
          * @example
-         *   constructor(context, name, webGLVariableName, params) {
-         *       super(context, name, webGLVariableName);
+         *   constructor(owner, name, webGLVariableName, params) {
+         *       super(owner, name, webGLVariableName);
          *       ...
          *       //possibly make use of params:
          *       this.params = this.getParams(params);
@@ -458,7 +458,7 @@
 
         /**
          * JavaScript initialization
-         *  - read/store default properties here using this.context.[load/store]Property(...)
+         *  - read/store default properties here using this.owner.[load/store]Property(...)
          *  - work with own HTML elements already attached to the DOM
          *      - set change listeners, input values!
          */
@@ -469,7 +469,7 @@
         /**
          * TODO: improve overall setter API
          * Allows to set the control value programatically.
-         * Does not trigger canvas re-rednreing, must be done manually (e.g. control.context.invalidate())
+         * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate())
          * @param encodedValue any value the given control can support, encoded
          *  (e.g. as the control acts on the GUI - for input number of
          *    values between 5 and 42, the value can be '6' or 6 or 6.15
@@ -508,7 +508,7 @@
          *  - either: delay toHtml to trigger insertion later (not nice)
          *  - do not allow changes before init call, these changes must happen at constructor
          */
-        toHtml(breakLine = true, controlCss = "") {
+        toHtml(classes = "", css = "") {
             throw "FlexRenderer.UIControls.IControl::toHtml() must be implemented.";
         }
 
@@ -524,7 +524,7 @@
          * Sample the parameter using ratio as interpolation, must be one-liner expression so that GLSL code can write
          *    `vec3 mySampledValue = ${this.color.sample("0.2")};`
          * NOTE: you can define your own global-scope functions to keep one-lined sampling,
-         * see this.context.includeGlobalCode(...)
+         * see this.owner.includeGlobalCode(...)
          * @param {(string|undefined)} value openGL value/variable, used in a way that depends on the UI control currently active
          *        (do not pass arguments, i.e. 'undefined' just get that value, note that some inputs might require you do it..)
          * @param {string} valueGlType GLSL type of the value
@@ -717,7 +717,7 @@
      *     ...
      * }
      *
-     * The subclass constructor should get the context reference, the name
+     * The subclass constructor should get the owner reference, the name
      * of the input and the parametrization.
      *
      * Further parameters passed are dependent on the control type, see
@@ -808,12 +808,11 @@
             this._needsLoad = true;
         }
 
-        toHtml(breakLine = true, controlCss = "") {
+        toHtml(classes = "", css = "") {
             if (!this.params.interactive) {
                 return "";
             }
-            const result = this.component.html(this.id, this.params, controlCss);
-            return breakLine ? `<div>${result}</div>` : result;
+            return this.component.html(this.id, this.params, classes, css);
         }
 
         define() {
@@ -853,13 +852,13 @@
     };
 
     $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIControls.IControl {
-        constructor(context, name, webGLVariableName, params) {
-            super(context, name, webGLVariableName);
+        constructor(owner, name, webGLVariableName, params) {
+            super(owner, name, webGLVariableName);
             this._c1 = new $.FlexRenderer.UIControls.SimpleUIControl(
-                context, name, webGLVariableName, params, $.FlexRenderer.UIControls.getUiElement('range'));
+                owner, name, webGLVariableName, params, $.FlexRenderer.UIControls.getUiElement('range'));
             params.title = "";
             this._c2 = new $.FlexRenderer.UIControls.SimpleUIControl(
-                context, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
+                owner, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
         }
 
         init() {
@@ -867,17 +866,17 @@
             this._c2._params = this._c1._params;
             this._c1.init();
             this._c2.init();
-            this._c1.on("default", function(value, encoded, context) {
+            this._c1.on("default", function(value, encoded, owner) {
                 document.getElementById(_this._c2.id).value = encoded;
                 _this._c2.value = value;
-                _this.changed("default", value, encoded, context);
+                _this.changed("default", value, encoded, owner);
             }, true); //silently fail if registered
-            this._c2.on("default", function(value, encoded, context) {
+            this._c2.on("default", function(value, encoded, owner) {
                 document.getElementById(_this._c1.id).value = encoded;
                 _this._c1.value = value;
                 // Only C1 loads values to gpu, request change
                 _this._c1._needsLoad = true;
-                _this.changed("default", value, encoded, context);
+                _this.changed("default", value, encoded, owner);
             }, true); //silently fail if registered
         }
 
@@ -889,13 +888,11 @@
             this._c1.glLoaded(program, gl);
         }
 
-        toHtml(breakLine = true, controlCss = "") {
+        toHtml(classes = "", css = "") {
             if (!this._c1.params.interactive) {
                 return "";
             }
-            let cls = breakLine ? "" : "class='d-inline-block'";
-            return `<div ${cls} ${controlCss}>${this._c1.toHtml(false, 'width: 48%;')}
-        ${this._c2.toHtml(false, 'width: 12%;')}</div>`;
+            return this._c1.toHtml(classes, css + "flex: 1;") + this._c2.toHtml(classes, css);
         }
 
         define() {

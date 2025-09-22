@@ -326,11 +326,14 @@
          * Get HTML code of the ShaderLayer's controls.
          * @returns {String} HTML code
          */
-        htmlControls() {
-            const controlsHtmls = [];
+        htmlControls(wrapper = null, classes = "", css = "") {
+            let controlsHtmls = [];
             for (const controlName in this._controls) {
                 const control = this[controlName];
-                controlsHtmls.push(control.toHtml(true));
+                controlsHtmls.push(control.toHtml(classes, css));
+            }
+            if (wrapper) {
+                controlsHtmls = controlsHtmls.map(wrapper);
             }
             return controlsHtmls.join("");
         }
@@ -457,11 +460,23 @@
                     if (!channel || typeof channel !== "string" || channelPattern.exec(channel) === null) {
                         console.warn(`Invalid channel '${controlName}'. Will use channel '${def}'.`, channel, options);
                         this.storeProperty(controlName, def);
-                        channel = def;
+                        channel = predefined.default || def;
                     }
 
                     if (!sourceDef.acceptsChannelCount(channel.length)) {
-                        throw `${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}`;
+                        console.warn(`${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}. Using default.`);
+                        this.storeProperty(controlName, def);
+                        channel = predefined.default || def;
+
+                        // if def is not compatible with the channel count, try to stack it
+                        if (!sourceDef.acceptsChannelCount(channel.length)) {
+                            channel = def;
+                            console.warn(`${this.constructor.name()} does not support channel length ${channel.length} for channel: ${channel}. Using default.`);
+                            while (channel.length < 5 && !sourceDef.acceptsChannelCount(channel.length)) {
+                                channel += def;
+                            }
+                            this.storeProperty(controlName, channel);
+                        }
                     }
 
                     if (channel !== options[controlName]) {
