@@ -395,7 +395,7 @@
          * @memberof FlexRenderer
          */
         createShaderLayer(id, shaderConfig, copyConfig = false) {
-            id = this._sanitizeKey(id);
+            id = $.FlexRenderer.sanitizeKey(id);
 
             const Shader = $.FlexRenderer.ShaderMediator.getClass(shaderConfig.type);
             if (!Shader) {
@@ -455,7 +455,7 @@
         }
 
         getShaderLayer(id) {
-            id = this._sanitizeKey(id);
+            id = $.FlexRenderer.sanitizeKey(id);
             return this._shaders[id];
         }
 
@@ -475,7 +475,7 @@
             if (!order) {
                 this._shadersOrder = null;
             }
-            this._shadersOrder = order.map(this._sanitizeKey);
+            this._shadersOrder = order.map($.FlexRenderer.sanitizeKey);
         }
 
         /**
@@ -495,7 +495,7 @@
          * @memberof FlexRenderer
          */
         removeShader(id) {
-            id = this._sanitizeKey(id);
+            id = $.FlexRenderer.sanitizeKey(id);
             const shader = this._shaders[id];
             if (!shader) {
                 return;
@@ -540,7 +540,7 @@
             this._programImplementations = {};
         }
 
-        _sanitizeKey(key) {
+        static sanitizeKey(key) {
             if (!$.FlexRenderer.idPattern.test(key)) {
                 key = key.replace(/[^0-9a-zA-Z_]/g, '');
                 key = key.replace(/_+/g, '_');

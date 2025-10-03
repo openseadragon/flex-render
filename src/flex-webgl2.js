@@ -20,9 +20,10 @@
     }
 
     init() {
+        const textureAtlas = this.atlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
         //todo consider passing reference to this
-        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl), "firstPass");
-        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl), "secondPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, textureAtlas), "firstPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, textureAtlas), "secondPass");
     }
 
     getVersion() {
@@ -45,6 +46,10 @@
         this.renderer.getProgram(this.firstPassProgramKey).setDimensions(x, y, width, height, levels);
         this.renderer.getProgram(this.secondPassProgramKey).setDimensions(x, y, width, height, levels);
         //todo consider some elimination of too many calls
+    }
+
+    destroy() {
+        this.atlas.destroy();
     }
 
     getBlendingFunction(name) {
@@ -156,8 +161,8 @@ return blendAlpha(fg, bg, bg.rgb + fg.rgb - 2.0 * bg.rgb * fg.rgb);`,
 
 
 $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgram {
-    constructor(context, gl) {
-        super(context, gl);
+    constructor(context, gl, atlas) {
+        super(context, gl, atlas);
         this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
         //todo this might be limiting in some wild cases... make it configurable..? or consider 1d texture
         this.textureMappingsUniformSize = 64;
@@ -295,6 +300,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         for (const renderInfo of renderArray) {
             renderInfo.shader.glLoaded(this.webGLProgram, gl);
         }
+        this.atlas.load(this.webGLProgram);
     }
 
     /**
@@ -330,6 +336,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
         gl.uniform1i(this._stencilLocation, 1);
 
+        this.atlas.bind(gl.TEXTURE2);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.bindVertexArray(null);
@@ -422,6 +429,8 @@ ivec2 osd_texture_size(int index) {
     return textureSize(u_inputTextures, index).xy;
 }
 
+${this.atlas.getFragmentShaderDefinition()}
+
 // UTILITY function
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
@@ -439,9 +448,11 @@ vec4 blend_source_over(vec4 fg, vec4 bg) {
     return pre_fg + bg * (1.0 - pre_fg.a);
 }
 
-// GLOBAL SCOPE CODE:${Object.keys(globalScopeCode).length !== 0 ? Object.values(globalScopeCode).join("\n") : '\n    // No global scope code here...'}
+// GLOBAL SCOPE CODE:
+${Object.keys(globalScopeCode).length !== 0 ? Object.values(globalScopeCode).join("\n") : '\n    // No global scope code here...'}
 
-// DEFINITIONS OF SHADERLAYERS:${definition !== '' ? definition : '\n    // Any non-default shaderLayer here to define...'}
+// DEFINITIONS OF SHADERLAYERS:
+${definition !== '' ? definition : '\n    // No shaderLayer here to define...'}
 
 void main() {
     ${execution}
@@ -453,8 +464,8 @@ void main() {
 
 $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgram {
 
-    constructor(context, gl) {
-        super(context, gl);
+    constructor(context, gl, atlas) {
+        super(context, gl, atlas);
         this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
         this._textureIndexes = [...Array(this._maxTextures).keys()];
         // Todo: RN we support only MAX_COLOR_ATTACHMENTS in the texture array, which varies beetween devices
@@ -897,4 +908,373 @@ void main() {
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     }
 };
+
+// todo: support no-atlas mode (dont bind anything if not used at all)
+$.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.TextureAtlas {
+
+    constructor(gl, opts) {
+        super(gl, opts);
+        this.version = 1;
+        this._atlasUploadedVersion = -1;
+
+        /** @type {{ id:number, source:any, w:number, h:number, layer:number, x:number, y:number }[]} */
+        this._entries = [];
+        this._pendingUploads = [];
+
+        /** @type {{ shelves: { y:number, h:number, x:number }[], nextY:number }[]} */
+        this._layerState = [];
+
+        // Per-id uniforms for the shader
+        this._scale = new Float32Array(this.maxIds * 2);   // sx, sy
+        this._offset = new Float32Array(this.maxIds * 2);  // ox, oy
+        this._layer = new Int32Array(this.maxIds);         // layer index
+        this._createTexture(this.layerWidth, this.layerHeight, this.layers);
+    }
+
+
+    /**
+     * Add an image. Returns a stable atlasId.
+     * @param {ImageBitmap|HTMLImageElement|HTMLCanvasElement|ImageData|Uint8Array} source
+     * @param {number} [w]
+     * @param {number} [h]
+     * @returns {number}
+     */
+    addImage(source, w, h) {
+        const width = (typeof w === 'number') ? w :
+            (source && (source.width || source.naturalWidth || (source.canvas && source.canvas.width) || source.w));
+        const height = (typeof h === 'number') ? h :
+            (source && (source.height || source.naturalHeight || (source.canvas && source.canvas.height) || source.h));
+
+        if (!width || !height) {
+            throw new Error('TextureAtlas2DArray.addImage: width or height missing');
+        }
+
+        const place = this._ensureCapacityFor(width, height);
+
+        const id = this._entries.length;
+
+        // uniforms for shader (can be uploaded later; we just fill CPU buffers now)
+        this._layer[id] = place.layer;
+        this._scale[id * 2 + 0] = width / this.layerWidth;
+        this._scale[id * 2 + 1] = height / this.layerHeight;
+        this._offset[id * 2 + 0] = (place.x + this.padding) / this.layerWidth;
+        this._offset[id * 2 + 1] = (place.y + this.padding) / this.layerHeight;
+
+        // remember for re-pack / re-upload
+        this._entries.push({
+            id: id,
+            source: source,
+            w: width,
+            h: height,
+            layer: place.layer,
+            x: place.x,
+            y: place.y
+        });
+
+        // enqueue GPU upload (performed later in load()/commitUploads())
+        this._pendingUploads.push({
+            source: source,
+            w: width,
+            h: height,
+            layer: place.layer,
+            x: place.x,
+            y: place.y
+        });
+
+        if (id + 1 > this.maxIds) {
+            throw new Error('TextureAtlas2DArray: exceeded maxIds capacity');
+        }
+
+        this.version++;
+        return id;
+    }
+
+    /**
+     * Texture atlas works as a single texture unit. Bind the atlas before using it at desired texture unit.
+     * @param textureUnit
+     */
+    bind(textureUnit) {
+        const gl = this.gl;
+
+        // textureUnit is the numeric unit index (0..N-1)
+        gl.activeTexture(textureUnit);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+
+        // only push uniform arrays when changed (fast and harmless during draw)
+        if (this._atlasUploadedVersion !== this.version) {
+            gl.uniform2fv(this._atlasScaleLoc, this._scale);
+            gl.uniform2fv(this._atlasOffsetLoc, this._offset);
+            gl.uniform1iv(this._atlasLayerLoc, this._layer);
+            this._atlasUploadedVersion = this.version;
+        }
+    }
+
+    /**
+     * Get WebGL Atlas shader code. This code must define the following function:
+     * vec4 osd_atlas_texture(int, vec2)
+     * which selects texture ID (1st arg) and returns the color at the uv position (2nd arg)
+     *
+     * @return {string}
+     */
+    getFragmentShaderDefinition() {
+        return `
+uniform sampler2DArray u_atlasTex;
+uniform vec2  u_atlasScale[${this.maxIds}];
+uniform vec2  u_atlasOffset[${this.maxIds}];
+uniform int   u_atlasLayer[${this.maxIds}];
+
+vec4 osd_atlas_texture(int atlasId, vec2 uv) {
+    vec2 st = uv * u_atlasScale[atlasId] + u_atlasOffset[atlasId];
+    float layer = float(u_atlasLayer[atlasId]);
+    return texture(u_atlasTex, vec3(st, layer));
+}
+`;
+    }
+
+    /**
+     * Load the current atlas uniform locations.
+     * @param {WebGLProgram} program
+     */
+    load(program) {
+        const gl = this.gl;
+
+        // fetch uniform locations (existing behavior)
+        this._atlasTexLoc    = gl.getUniformLocation(program, "u_atlasTex");
+        this._atlasScaleLoc  = gl.getUniformLocation(program, "u_atlasScale[0]");
+        this._atlasOffsetLoc = gl.getUniformLocation(program, "u_atlasOffset[0]");
+        this._atlasLayerLoc  = gl.getUniformLocation(program, "u_atlasLayer[0]");
+
+        // commit all staged texSubImage3D uploads in a single pass
+        this._commitUploads();
+
+        // (optional) you can also pre-upload the uniform arrays here once right after commit
+        if (this._atlasUploadedVersion !== this.version) {
+            gl.uniform2fv(this._atlasScaleLoc, this._scale);
+            gl.uniform2fv(this._atlasOffsetLoc, this._offset);
+            gl.uniform1iv(this._atlasLayerLoc, this._layer);
+            this._atlasUploadedVersion = this.version;
+        }
+    }
+
+    /**
+     * Destroy the atlas.
+     */
+    destroy() {
+        const gl = this.gl;
+
+        if (this.texture) {
+            gl.deleteTexture(this.texture);
+            this.texture = null;
+        }
+
+        this._entries.length = 0;
+        this._layerState.length = 0;
+    }
+
+    _commitUploads() {
+        if (!this.texture) {
+            // allocate storage if not created yet
+            this._createTexture(this.layerWidth, this.layerHeight, this.layers);
+        }
+
+        if (!this._pendingUploads.length) {
+            return;
+        }
+
+        const gl = this.gl;
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+
+        for (const u of this._pendingUploads) {
+            const x = u.x + this.padding;
+            const y = u.y + this.padding;
+
+            if (u.source instanceof ImageBitmap ||
+                (typeof HTMLImageElement !== 'undefined' && u.source instanceof HTMLImageElement) ||
+                (typeof HTMLCanvasElement !== 'undefined' && u.source instanceof HTMLCanvasElement)) {
+                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, u.layer, u.w, u.h, 1, this.format, this.type, u.source);
+            } else if (u.source && u.source.data && typeof u.source.width === 'number' && typeof u.source.height === 'number') {
+                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, u.layer, u.w, u.h, 1, this.format, this.type, u.source.data);
+            } else if (u.source && (u.source instanceof Uint8Array || u.source instanceof Uint8ClampedArray)) {
+                gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, u.layer, u.w, u.h, 1, this.format, this.type, u.source);
+            } else {
+                gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+                throw new Error('Unsupported image source for atlas');
+            }
+        }
+
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+
+        // all uploads done; clear queue
+        this._pendingUploads.length = 0;
+    }
+
+    _createTexture(w, h, depth) {
+        const gl = this.gl;
+
+        if (this.texture) {
+            gl.deleteTexture(this.texture);
+            this.texture = null;
+        }
+
+        this.texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+        gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, this.internalFormat, w, h, Math.max(depth, 1));
+        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+
+        this.layerWidth = w;
+        this.layerHeight = h;
+        this.layers = depth;
+
+        // reset packer state sized to current depth
+        this._layerState = [];
+        for (let i = 0; i < depth; i++) {
+            this._layerState.push({ shelves: [], nextY: 0 });
+        }
+    }
+
+    _ensureCapacityFor(width, height) {
+        // try current layers first
+        for (let li = 0; li < this.layers; li++) {
+            const pos = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+            if (pos) {
+                return { layer: li, x: pos.x, y: pos.y, willRealloc: false };
+            }
+        }
+
+        // if rectangle is bigger than layer extent, grow extent (power of 2)
+        let newW = this.layerWidth;
+        let newH = this.layerHeight;
+        if (width + this.padding * 2 > newW || height + this.padding * 2 > newH) {
+            while (newW < width + this.padding * 2) {
+                newW *= 2;
+            }
+            while (newH < height + this.padding * 2) {
+                newH *= 2;
+            }
+            // reallocate texture with same layer count but bigger extent
+            this._resizeAndReupload(newW, newH, this.layers);
+        }
+
+        // try again after extent growth
+        for (let li = 0; li < this.layers; li++) {
+            const pos2 = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+            if (pos2) {
+                return { layer: li, x: pos2.x, y: pos2.y, willRealloc: false };
+            }
+        }
+
+        // still not fitting due to fragmentation / filled layers: add one or more layers
+        let newLayers = Math.max(this.layers * 2, this.layers + 1);
+        this._resizeAndReupload(this.layerWidth, this.layerHeight, newLayers);
+
+        // after adding layers there will be empty layers to place into
+        const li = this._firstEmptyLayer();
+        const pos3 = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+        return { layer: li, x: pos3.x, y: pos3.y, willRealloc: false };
+    }
+
+    _firstEmptyLayer() {
+        for (let i = 0; i < this.layers; i++) {
+            const st = this._layerState[i];
+            if ((st.nextY === 0) && st.shelves.length === 0) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    _resizeAndReupload(newW, newH, newLayers) {
+        // keep old entries and repack from scratch
+        const oldEntries = this._entries.slice();
+
+        this._createTexture(newW, newH, newLayers);
+
+        // clear packing and pending upload queues
+        this._entries.length = 0;
+        this._pendingUploads.length = 0;
+
+        // re-place each entry; update uniforms; enqueue for upload
+        for (const ent of oldEntries) {
+            const pos = this._ensureCapacityFor(ent.w, ent.h);
+            ent.layer = pos.layer;
+            ent.x = pos.x;
+            ent.y = pos.y;
+
+            const id = ent.id;
+
+            this._layer[id] = ent.layer;
+            this._scale[id * 2 + 0] = ent.w / this.layerWidth;
+            this._scale[id * 2 + 1] = ent.h / this.layerHeight;
+            this._offset[id * 2 + 0] = (ent.x + this.padding) / this.layerWidth;
+            this._offset[id * 2 + 1] = (ent.y + this.padding) / this.layerHeight;
+
+            this._entries.push(ent);
+            this._pendingUploads.push({
+                source: ent.source,
+                w: ent.w,
+                h: ent.h,
+                layer: ent.layer,
+                x: ent.x,
+                y: ent.y
+            });
+        }
+
+        // mark uniforms changed; actual GPU uploads will occur in load()/commitUploads()
+        this.version++;
+    }
+
+    _tryPlaceRect(layerIndex, w, h) {
+        const W = this.layerWidth;
+        const H = this.layerHeight;
+        const st = this._layerState[layerIndex];
+
+        // try existing shelves
+        for (const shelf of st.shelves) {
+            if (h <= shelf.h && shelf.x + w <= W) {
+                const x = shelf.x;
+                const y = shelf.y;
+                shelf.x += w;
+                return { x: x, y: y };
+            }
+
+        }
+
+        // start a new shelf
+        if (st.nextY + h <= H) {
+            const y = st.nextY;
+            st.shelves.push({ y: y, h: h, x: w });
+            st.nextY += h;
+            return { x: 0, y: y };
+        }
+
+        return null;
+    }
+
+    _uploadSource(source, w, h, layer, x, y) {
+        const gl = this.gl;
+
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
+
+        if (source instanceof ImageBitmap ||
+            (typeof HTMLImageElement !== 'undefined' && source instanceof HTMLImageElement) ||
+            (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement)) {
+            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, layer, w, h, 1, this.format, this.type, source);
+        } else if (source && source.data && typeof source.width === 'number' && typeof source.height === 'number') {
+            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, layer, w, h, 1, this.format, this.type, source.data);
+        } else if (source && (source instanceof Uint8Array || source instanceof Uint8ClampedArray)) {
+            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, layer, w, h, 1, this.format, this.type, source);
+        } else {
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+            throw new Error('Unsupported image source for atlas');
+        }
+
+        // optional: no mipmaps for now (icon UI)
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+    }
+};
+
 })(OpenSeadragon);

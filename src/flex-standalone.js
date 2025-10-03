@@ -19,12 +19,25 @@
             options:            options
         });
 
-        drawer.draw = (function (tiledImages) {
+        const originalDraw = drawer.draw.bind(drawer);
+        drawer.draw = (function (tiledImages, view = undefined) {
+            if (view) {
+                const tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
+                const tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
+
+                return Promise.all(tasks).then(() => {
+                    originalDraw(tiledImages, view);
+                }).catch(e => console.error(e)).then(() => {
+                    // free data
+                    const dId = drawer.getId();
+                    tiles.forEach(t => t.tile.getCache().destroyInternalCache(dId));
+                });
+            }
+
             // Steal FP initialized textures
             if (!this.renderer.__firstPassResult) {
                 // todo dirty, hide the __firstPassResult structure within the program logics
                 const program = this.renderer.getProgram('firstPass');
-                console.log("Stealing first pass result from the renderer: ", program.colorTextureA, program.stencilTextureA);
                 this.renderer.__firstPassResult = {
                     texture: program.colorTextureA,
                     stencil: program.stencilTextureA,
@@ -33,7 +46,7 @@
 
             // Instead of re-rendering, we steal last state of the renderer and re-render second pass only.
             viewer.drawer.renderer.copyRenderOutputToContext(this.renderer);
-            this._drawTwoPassSecond({
+            return this._drawTwoPassSecond({
                 zoom: this.viewport.getZoom(true)
             });
 

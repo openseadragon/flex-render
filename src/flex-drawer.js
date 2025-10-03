@@ -79,7 +79,6 @@
                 usePrivateCache: true,
                 preloadCache: true,
                 copyShaderConfig: false,
-                debugInfoContainer: undefined,
                 handleNavigator: true
             };
         }
@@ -247,11 +246,19 @@
             tiledImage.__wglCompositeHandler = e => {
                 const shader = this.renderer.getShaderLayer(shaderId);
                 const config = shader.getConfig();
-                // eslint-disable-next-line camelcase
-                config.params.use_blend = tiledImage.compositeOperation;
-                // eslint-disable-next-line camelcase
-                config.params.use_mode = 'blend';
-                shader.resetMode(config.params, false);
+                const operation = tiledImage.compositeOperation;
+                if (operation) {
+                    // eslint-disable-next-line camelcase
+                    config.params.use_blend = operation;
+                    // eslint-disable-next-line camelcase
+                    config.params.use_mode = 'blend';
+                } else {
+                    // eslint-disable-next-line camelcase
+                    delete config.params.use_blend;
+                    // eslint-disable-next-line camelcase
+                    config.params.use_mode = 'show';
+                }
+                shader.resetMode(config.params, true);
                 this._requestRebuild(0);
             };
 
@@ -409,8 +416,13 @@
         /**
          * Draw using FlexRenderer.
          * @param {[TiledImage]} tiledImages array of TiledImage objects to draw
+         * @param {Object} [view=undefined] custom view position if desired
+         * @param view.bounds {OpenSeadragon.Rect} bounds of the viewport
+         * @param view.center {OpenSeadragon.Point} center of the viewport
+         * @param view.rotation {Number} rotation of the viewport
+         * @param view.zoom {Number} zoom of the viewport
          */
-        draw(tiledImages) {
+        draw(tiledImages, view = undefined) {
             // If we did not rebuild yet, avoid rendering - invalid program
             if (this._hasInvalidBuildState()) {
                 this.viewer.forceRedraw();
@@ -418,7 +430,7 @@
             }
 
             const bounds = this.viewport.getBoundsNoRotateWithMargins(true);
-            let view = {
+            view = view || {
                 bounds: bounds,
                 center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
                 rotation: this.viewport.getRotation(true) * Math.PI / 180,
@@ -566,7 +578,8 @@
                 const shader = shaders[shaderID];
                 const config = shader.getConfig();
 
-                // Here we could do some nicer logics, RN we just treat TI0 as a source of truth
+                // TODO Here we could do some nicer logics, RN we just treat TI0 as a source of truth
+                // also when rendering offscreen, the tiled image might be detached
                 const tiledImage = this.viewer.world.getItemAt(config.tiledImages[0]);
                 sources.push({
                     zoom: viewport.zoom,
@@ -743,9 +756,6 @@
             // SETUP CANVASES
             this._gl = this.renderer.gl;
             this._setupCanvases();
-
-            // Todo not supported:
-            //this.context = this._outputContext; // API required by tests
 
             canvas.width = viewportSize.x;
             canvas.height = viewportSize.y;

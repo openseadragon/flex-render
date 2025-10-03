@@ -28,7 +28,7 @@ const drawer = "flex-renderer"
 const selectedWebglVersion = url.searchParams.get("webgl-version") || "2.0";
 const drawerOptions = {
     "flex-renderer": {
-        debug: false,
+        debug: true,
         webGLPreferredVersion: selectedWebglVersion,
         htmlHandler: (shaderLayer, shaderConfig) => {
             const container = document.getElementById('my-shader-ui-container');
