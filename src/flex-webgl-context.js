@@ -192,7 +192,7 @@
         /**
          *
          * @param context
-         * @param gl {WebGLRenderingContext} Rendering program.
+         * @param gl {WebGLRenderingContext|WebGL2RenderingContext} Rendering program.
          * @param atlas {OpenSeadragon.FlexRenderer.TextureAtlas} Shared texture atlas.
          */
         constructor(context, gl, atlas) {

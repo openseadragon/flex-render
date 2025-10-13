@@ -997,7 +997,7 @@
      */
     $.BlankTileSource = class extends $.TileSource {
         supports(data, url) {
-            return data.type === "_blank" || url.type === "_blank";
+            return (data && data.type === "_blank") || (url && url.type === "_blank");
         }
         configure(options, dataUrl, postData) {
             return $.extend(options, {
