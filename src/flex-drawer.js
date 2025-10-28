@@ -87,7 +87,7 @@
          * Override the default configuration: the renderer will use given shaders,
          * supplied with data from collection of TiledImages, to render.
          * TiledImages are treated only as data sources, the rendering outcome is fully in controls of the shader specs.
-         * @param {object} shaders map of id -> shader config value
+         * @param {Object.<string, ShaderConfig>} shaders map of id -> shader config value
          * @param {Array<string>} [shaderOrder=undefined] custom order of shader ids to render.
          * @return {OpenSeadragon.Promise} promise resolved when the renderer gets rebuilt
          */
@@ -120,7 +120,7 @@
             }
             shaderOrder = shaderOrder || Object.keys(shaders);
             this.renderer.setShaderLayerOrder(shaderOrder);
-            return this._requestRebuild();
+            return this._requestRebuild(0);
         }
 
         /**

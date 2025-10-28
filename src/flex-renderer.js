@@ -222,7 +222,7 @@
          * @param {RenderOptions|undefined} options
          * @return {RenderOutput}
          */
-        secondPassProcessData(renderArray, options= undefined) {
+        secondPassProcessData(renderArray, options = undefined) {
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);

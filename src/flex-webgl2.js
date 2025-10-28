@@ -309,7 +309,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
     use(renderOutput, renderArray, options) {
         //todo flatten render array :/
         const gl = this.gl;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, options?.framebuffer || null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, options ? options.framebuffer : null);
         gl.bindVertexArray(this.vao);
 
         const shaderVariables = [];
