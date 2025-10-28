@@ -29,6 +29,7 @@
             contextAttributes.alpha = true;
             // indicates that the page compositor will assume the drawing buffer contains colors with pre-multiplied alpha
             contextAttributes.premultipliedAlpha = true;
+            contextAttributes.preserveDrawingBuffer = true;
 
             if (webGLVersion === "1.0") {
                 return canvas.getContext('webgl', contextAttributes);
@@ -184,6 +185,13 @@
     };
 
     /**
+     * @typedef {object} RenderOptions
+     * @property {GLint|null} [framebuffer=null]
+     *
+     * todo: needs to differentiate first and second pass... might need to define interface for both individually
+     */
+
+    /**
      * WebGL Program instance
      * @class OpenSeadragon.FlexRenderer.WGLProgram
      */
@@ -265,8 +273,10 @@
         /**
          * Use program. Arbitrary arguments.
          * @param {RenderOutput} renderOutput the object passed between first and second pass
+         * @param {FPRenderPackage[]|SPRenderPackage[]} renderArray
+         * @param {RenderOptions|undefined} options used for now only for second pass, to specify which FBO to render to
          */
-        use(renderOutput) {
+        use(renderOutput, renderArray, options) {
         }
 
         unload() {

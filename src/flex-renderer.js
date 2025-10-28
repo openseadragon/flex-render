@@ -207,7 +207,7 @@
             if (this.useProgram(program, "first-pass")) {
                 program.load();
             }
-            const result = program.use(this.__firstPassResult, source);
+            const result = program.use(this.__firstPassResult, source, undefined);
             if (this.debug) {
                 this._showOffscreenMatrix(result, source.length, {scale: 0.5, pad: 8});
             }
@@ -219,14 +219,15 @@
         /**
          * Call to second-pass draw
          * @param {SPRenderPackage[]} renderArray
+         * @param {RenderOptions|undefined} options
          * @return {RenderOutput}
          */
-        secondPassProcessData(renderArray) {
+        secondPassProcessData(renderArray, options= undefined) {
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);
             }
-            return program.use(this.__firstPassResult, renderArray);
+            return program.use(this.__firstPassResult, renderArray, options);
         }
 
         /**

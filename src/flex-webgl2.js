@@ -306,10 +306,10 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
     /**
      * Use program. Arbitrary arguments.
      */
-    use(renderOutput, renderArray) {
+    use(renderOutput, renderArray, options) {
         //todo flatten render array :/
         const gl = this.gl;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, options?.framebuffer || null);
         gl.bindVertexArray(this.vao);
 
         const shaderVariables = [];
@@ -614,6 +614,7 @@ void main() {
          * Rendering vector tiles. Positions of tiles are always rectangular (stretched and moved by the matrix),
          * not computed but read on-vertex-shader. Texture coords might be customized (e.g. overlap), and
          * need to be explicitly set to each vertex. Need 2x vec4 to read 8 values for 4 vertices.
+         * NOTE! Divisor 0 not usable, since it reads from the beginning of a buffer for all instances.
          */
         gl.bindVertexArray(vao);
         // Texture coords are vec2 * 4 coords for the textures, needs to be passed since textures can have offset
@@ -683,10 +684,8 @@ void main() {
 
     /**
      * Use program. Arbitrary arguments.
-     * @param {RenderOutput} renderOutput
-     * @param {FPRenderPackage[]} sourceArray
      */
-    use(renderOutput, sourceArray) {
+    use(renderOutput, sourceArray, options) {
         const gl = this.gl;
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
         gl.enable(gl.STENCIL_TEST);

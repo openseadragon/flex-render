@@ -89,6 +89,7 @@
          * TiledImages are treated only as data sources, the rendering outcome is fully in controls of the shader specs.
          * @param {object} shaders map of id -> shader config value
          * @param {Array<string>} [shaderOrder=undefined] custom order of shader ids to render.
+         * @return {OpenSeadragon.Promise} promise resolved when the renderer gets rebuilt
          */
         overrideConfigureAll(shaders, shaderOrder = undefined) {
             // todo reset also when reordering tiled images!
@@ -104,9 +105,9 @@
                     this._configuredExternally = false;
                     // If we changed render style, recompile everything
                     this.renderer.deleteShaders();
-                    this.viewer.world._items.map(item => this.tiledImageCreated(item).id);
+                    return $.Promise.all(this.viewer.world._items.map(item => this.tiledImageCreated(item).id));
                 }
-                return;
+                return $.Promise.resolve();
             }
 
             // If custom rendering used, use arbitrary external configuration
@@ -119,7 +120,7 @@
             }
             shaderOrder = shaderOrder || Object.keys(shaders);
             this.renderer.setShaderLayerOrder(shaderOrder);
-            this._requestRebuild();
+            return this._requestRebuild();
         }
 
         /**
@@ -138,6 +139,7 @@
          * shader if desired. This shader is ignored if overrideConfigureAll({...}) used.
          * @param {OpenSeadragon.TiledImage} tiledImage
          * @param {ShaderConfig} shader
+         * @return {ShaderConfig} shader config used, a copy if options.copyShaderConfig is true, otherwise a modified argument
          */
         configureTiledImage(tiledImage, shader) {
             if (this.options.copyShaderConfig) {
@@ -175,7 +177,7 @@
         /**
          * Register TiledImage into the system.
          * @param {OpenSeadragon.TiledImage} tiledImage
-         * @return {ShaderConfig|null}
+         * @return {OpenSeadragon.Promise} promise resolved when the renderer gets rebuilt
          */
         tiledImageCreated(tiledImage) {
             // Always attempt to clean up
@@ -187,8 +189,7 @@
             if (this._configuredExternally) {
                 // __shaderConfig reference is kept only when managed internally, can keep custom shader config for particular tiled image
                 delete tiledImage.__shaderConfig;
-                this._requestRebuild();
-                return null;
+                return this._requestRebuild();
             }
 
             let config = tiledImage.__shaderConfig;
@@ -266,8 +267,7 @@
 
             // copy config only applied when passed externally
             this.renderer.createShaderLayer(shaderId, config, false);
-            this._requestRebuild();
-            return config;
+            return this._requestRebuild();
         }
 
         /**
