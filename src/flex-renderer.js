@@ -566,109 +566,247 @@
          * @param {Object} [opts]  options
          * @return {RenderOutput}
          */
-        copyRenderOutputToContext(dst, renderOutput = undefined, {
-            level = 0,
-            format = null,
-            type = null,
-            internalFormatGuess = null,
-        } = {}) {
+        copyRenderOutputToContext(
+            dst,
+            renderOutput = undefined,
+            {
+                level = 0,
+                format = null,
+                type = null,
+                internalFormatGuess = null,
+            } = {}
+        ) {
             renderOutput = renderOutput || this.__firstPassResult;
             const out = {};
+            if (!renderOutput) {
+                dst.__firstPassResult = out;
+                return out;
+            }
+
+            const sameContext = dst.gl === this.gl;
+
             if (renderOutput.texture) {
+                // Reuse existing dst texture only if we know it's from the same context.
+                const prevDstTex =
+                    sameContext && dst.__firstPassResult && dst.__firstPassResult.texture ?
+                        dst.__firstPassResult.texture : null;
+
                 out.texture = this._copyTexture2DArrayBetweenContexts({
-                    dstGL: dst.gl, srcTex: renderOutput.texture, dstTex: dst.__firstPassResult.texture,
-                    textureLayerCount: renderOutput.sourcesLength, format, type, internalFormatGuess,
+                    srcGL: this.gl,
+                    dstGL: dst.gl,
+                    srcTex: renderOutput.texture,
+                    dstTex: prevDstTex,
+                    textureLayerCount: renderOutput.sourcesLength,
+                    level,
+                    format,
+                    type,
+                    internalFormatGuess,
                 });
             }
+
             if (renderOutput.stencil) {
+                const prevDstStencil =
+                    sameContext && dst.__firstPassResult && dst.__firstPassResult.stencil ?
+                        dst.__firstPassResult.stencil : null;
+
                 out.stencil = this._copyTexture2DArrayBetweenContexts({
-                    dstGL: dst.gl, srcTex: renderOutput.stencil, dstTex: dst.__firstPassResult.stencil,
-                    textureLayerCount: renderOutput.sourcesLength, format, type, internalFormatGuess,
+                    srcGL: this.gl,
+                    dstGL: dst.gl,
+                    srcTex: renderOutput.stencil,
+                    dstTex: prevDstStencil,
+                    textureLayerCount: renderOutput.sourcesLength,
+                    level,
+                    format,
+                    type,
+                    internalFormatGuess,
                 });
             }
+
             out.sourcesLength = renderOutput.sourcesLength || 0;
             dst.__firstPassResult = out;
             return out;
         }
 
         /**
-         * Copy a TEXTURE_2D_ARRAY from one WebGL2 context to another by readPixels -> texSubImage3D.
+         * Copy a TEXTURE_2D_ARRAY from one WebGL2 context to another.
+         *
+         * - If srcGL === dstGL: GPU-only copy via framebuffer + copyTexSubImage3D.
+         * - If srcGL !== dstGL: readPixels -> texSubImage3D CPU round-trip.
+         *
          * Creates the destination texture if not provided.
          *
          * @param {Object} opts
+         * @param {WebGL2RenderingContext} opts.srcGL
          * @param {WebGL2RenderingContext} opts.dstGL
          * @param {WebGLTexture} opts.srcTex           - source TEXTURE_2D_ARRAY
-         * @param {WebGLTexture?} [opts.dstTex]        - optional destination TEXTURE_2D_ARRAY (created if omitted)
+         * @param {WebGLTexture?} [opts.dstTex]        - destination TEXTURE_2D_ARRAY (created if omitted)
+         * @param {number} opts.textureLayerCount      - number of array layers
          * @param {number} [opts.level=0]              - mip level to copy
+         * @param {number} [opts.width]                - texture width; falls back to canvas/drawingBuffer if omitted
+         * @param {number} [opts.height]               - texture height; falls back to canvas/drawingBuffer if omitted
          * @param {GLenum} [opts.format=srcGL.RGBA]    - pixel format for read/upload
-         * @param {GLenum} [opts.type=srcGL.UNSIGNED_BYTE]  - pixel type for read/upload (supports srcGL.FLOAT if you have the extensions)
-         * @param {GLenum} [opts.internalFormatGuess]  - sized internal format for dst allocation (defaults to RGBA8 for UNSIGNED_BYTE, RGBA32F for FLOAT)
+         * @param {GLenum} [opts.type=srcGL.UNSIGNED_BYTE]  - pixel type for read/upload
+         * @param {GLenum} [opts.internalFormatGuess]  - sized internal format for dst allocation
          * @returns {WebGLTexture} dstTex
          */
-        _copyTexture2DArrayBetweenContexts({ dstGL, srcTex, dstTex = null,
-               textureLayerCount, format = null, type = null, internalFormatGuess = null }) {
-            const gl = this.gl;
-            if (!(gl instanceof WebGL2RenderingContext) || !(dstGL instanceof WebGL2RenderingContext)) {
-                throw new Error('WebGL2 contexts required (texture arrays + tex(Sub)Image3D).');
+        _copyTexture2DArrayBetweenContexts({
+                                               srcGL,
+                                               dstGL,
+                                               srcTex,
+                                               dstTex = null,
+                                               textureLayerCount,
+                                               level = 0,
+                                               width = null,
+                                               height = null,
+                                               format = null,
+                                               type = null,
+                                               internalFormatGuess = null,
+                                           }) {
+            // Feature-detect WebGL2 instead of relying on instanceof
+            const isGL2 = srcGL && typeof srcGL.texStorage3D === "function";
+            const isDstGL2 = dstGL && typeof dstGL.texStorage3D === "function";
+            if (!isGL2 || !isDstGL2) {
+                throw new Error("WebGL2 contexts required (texture arrays + tex(Sub)Image3D).");
             }
 
-            // ---------- Inspect source texture dimensions ----------
-           // const srcPrevTex = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcTex);
+            const sameContext = srcGL === dstGL;
+
+            // ---------- Determine texture dimensions ----------
+            srcGL.bindTexture(srcGL.TEXTURE_2D_ARRAY, srcTex);
 
             if (format === null) {
-                format = gl.RGBA;
+                format = srcGL.RGBA;
             }
             if (type === null) {
-                type = gl.UNSIGNED_BYTE;
+                type = srcGL.UNSIGNED_BYTE;
             }
 
-            const width  = this.canvas.width;
-            const height = this.canvas.height;
-            if (!width || !height || !textureLayerCount) {
-                // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
-                throw new Error('Source texture level has no width/height/layers (is it initialized?)');
+            // Use provided width/height, or fall back to drawingBuffer/canvas
+            if (!width || !height) {
+                // try drawingBufferSize first (more correct for FBOs)
+                width =
+                    width ||
+                    srcGL.drawingBufferWidth ||
+                    (this.canvas && this.canvas.width) ||
+                    0;
+                height =
+                    height ||
+                    srcGL.drawingBufferHeight ||
+                    (this.canvas && this.canvas.height) ||
+                    0;
             }
 
-            // ---------- Create + allocate destination texture if needed ----------
-            //const dstPrevTex = dstGL.getParameter(dstGL.TEXTURE_BINDING_2D_ARRAY);
-            dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstTex);
+            const depth = textureLayerCount | 0;
 
-            // todo cache fb
-            const srcFB = gl.createFramebuffer();
-            gl.bindFramebuffer(gl.FRAMEBUFFER, srcFB);
-
-            // ---------- Prepare source framebuffer for extraction ----------
-            // const srcPrevFB = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-
-            const layerByteLen = width * height * 4 * (type === gl.FLOAT ? 4 : 1);
-            const layerBuf = (type === gl.FLOAT) ? new Float32Array(layerByteLen / 4) : new Uint8Array(layerByteLen);
-
-            for (let z = 0; z < textureLayerCount; z++) {
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, srcTex, 0, z);
-                const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-                if (status !== gl.FRAMEBUFFER_COMPLETE) {
-                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-                    gl.deleteFramebuffer(srcFB);
-                    // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
-                    // dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstPrevTex);
-                    throw new Error(`Framebuffer incomplete for source layer ${z}: 0x${status.toString(16)}`);
-                }
-
-                gl.readPixels(0, 0, width, height, format, type, layerBuf);
-                dstGL.texSubImage3D(
-                    dstGL.TEXTURE_2D_ARRAY, 0,
-                    0, 0, z,
-                    width, height, 1,
-                    format, type,
-                    layerBuf
+            if (!width || !height || !depth) {
+                throw new Error(
+                    "Source texture has no width/height/layers (missing width/height/textureLayerCount)."
                 );
             }
 
-            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-            gl.deleteFramebuffer(srcFB);
-            // gl.bindTexture(gl.TEXTURE_2D_ARRAY, srcPrevTex);
-            // dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstPrevTex);
+            // ---------- Create + allocate destination texture if needed ----------
+            if (!dstTex) {
+                dstTex = dstGL.createTexture();
+            }
+            dstGL.bindTexture(dstGL.TEXTURE_2D_ARRAY, dstTex);
+
+            if (!internalFormatGuess) {
+                if (type === srcGL.FLOAT) {
+                    internalFormatGuess = dstGL.RGBA32F; // requires appropriate extensions
+                } else {
+                    internalFormatGuess = dstGL.RGBA8;
+                }
+            }
+
+            dstGL.texParameteri(dstGL.TEXTURE_2D_ARRAY, dstGL.TEXTURE_MIN_FILTER, dstGL.NEAREST);
+            dstGL.texParameteri(dstGL.TEXTURE_2D_ARRAY, dstGL.TEXTURE_MAG_FILTER, dstGL.NEAREST);
+            dstGL.texParameteri(dstGL.TEXTURE_2D_ARRAY, dstGL.TEXTURE_WRAP_S, dstGL.CLAMP_TO_EDGE);
+            dstGL.texParameteri(dstGL.TEXTURE_2D_ARRAY, dstGL.TEXTURE_WRAP_T, dstGL.CLAMP_TO_EDGE);
+
+            dstGL.texStorage3D(
+                dstGL.TEXTURE_2D_ARRAY,
+                1, // levels
+                internalFormatGuess,
+                width,
+                height,
+                depth
+            );
+
+            // ---------- Copy per-layer ----------
+            const fb = srcGL.createFramebuffer();
+            srcGL.bindFramebuffer(srcGL.FRAMEBUFFER, fb);
+
+            if (sameContext) {
+                // GPU-only path
+                for (let z = 0; z < depth; z++) {
+                    srcGL.framebufferTextureLayer(
+                        srcGL.FRAMEBUFFER,
+                        srcGL.COLOR_ATTACHMENT0,
+                        srcTex,
+                        level,
+                        z
+                    );
+                    const status = srcGL.checkFramebufferStatus(srcGL.FRAMEBUFFER);
+                    if (status !== srcGL.FRAMEBUFFER_COMPLETE) {
+                        srcGL.bindFramebuffer(srcGL.FRAMEBUFFER, null);
+                        srcGL.deleteFramebuffer(fb);
+                        throw new Error(
+                            `Framebuffer incomplete for source layer ${z}: 0x${status.toString(16)}`
+                        );
+                    }
+
+                    srcGL.copyTexSubImage3D(
+                        srcGL.TEXTURE_2D_ARRAY,
+                        level,
+                        0, 0, z,    // dst x,y,z
+                        0, 0,       // src x,y
+                        width,
+                        height
+                    );
+                }
+            } else {
+                // Cross-context path: CPU readPixels -> texSubImage3D
+                const bytesPerChannel = type === srcGL.FLOAT ? 4 : 1;
+                const layerByteLen = width * height * 4 * bytesPerChannel;
+                const layerBuf =
+                    type === srcGL.FLOAT ?
+                        new Float32Array(layerByteLen / 4) : new Uint8Array(layerByteLen);
+
+                for (let z = 0; z < depth; z++) {
+                    srcGL.framebufferTextureLayer(
+                        srcGL.FRAMEBUFFER,
+                        srcGL.COLOR_ATTACHMENT0,
+                        srcTex,
+                        level,
+                        z
+                    );
+                    const status = srcGL.checkFramebufferStatus(srcGL.FRAMEBUFFER);
+                    if (status !== srcGL.FRAMEBUFFER_COMPLETE) {
+                        srcGL.bindFramebuffer(srcGL.FRAMEBUFFER, null);
+                        srcGL.deleteFramebuffer(fb);
+                        throw new Error(
+                            `Framebuffer incomplete for source layer ${z}: 0x${status.toString(16)}`
+                        );
+                    }
+
+                    srcGL.readPixels(0, 0, width, height, format, type, layerBuf);
+                    dstGL.texSubImage3D(
+                        dstGL.TEXTURE_2D_ARRAY,
+                        level,
+                        0, 0, z,
+                        width,
+                        height,
+                        1,
+                        format,
+                        type,
+                        layerBuf
+                    );
+                }
+            }
+
+            srcGL.bindFramebuffer(srcGL.FRAMEBUFFER, null);
+            srcGL.deleteFramebuffer(fb);
+
             return dstTex;
         }
 
@@ -745,13 +883,6 @@
                 // WebGL2 texture array
                 gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, 0, layerIndex);
             };
-            // Read helper (reuses pixels & imageData, draws into `stage`)
-            const readToStage = () => {
-                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-                // Set, don’t construct: avoids allocating a new buffer every time
-                imageData.data.set(pixels);
-                stageCtx.putImageData(imageData, 0, 0);
-            };
 
             // Iterate rows: each row = {texture i, stencil i}
             for (let i = 0; i < length; i++) {
@@ -767,8 +898,9 @@
                     console.error('Framebuffer incomplete for texture layer', i);
                     continue;
                 }
-                readToStage();
-                // draw scaled into grid
+                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                imageData.data.set(pixels);
+                stageCtx.putImageData(imageData, 0, 0);
                 const colTex = 0;
                 const xTex = pad + colTex * (cellW + pad);
                 const yBase = (drawLabels ? 18 : 0);
@@ -787,7 +919,9 @@
                     console.error('Framebuffer incomplete for stencil layer', i);
                     continue;
                 }
-                readToStage();
+                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                imageData.data.set(pixels);
+                stageCtx.putImageData(imageData, 0, 0);
                 const colSt = 1;
                 const xSt = pad + colSt * (cellW + pad);
                 ctx.drawImage(stage, 0, 0, width, height, xSt, yRow, cellW, cellH);
