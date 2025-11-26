@@ -517,6 +517,9 @@
                             if (tileInfo.vectors.lines) {
                                 tileInfo.vectors.lines.matrix = transformMatrix;
                             }
+                            if (tileInfo.vectors.points) {
+                                tileInfo.vectors.points.matrix = transformMatrix;
+                            }
                             vecPayload.push(tileInfo.vectors);
                         }
                     }
@@ -781,7 +784,7 @@
             }
 
             // NEW: vector geometry path (pre-tessellated triangles in tile UV space 0..1)
-            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines))) {
+            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines || data.points))) {
                 const tileInfo = { texture: null, position: null, vectors: {} };
 
                 const buildBatch = (meshes) => {
@@ -850,6 +853,9 @@
                 }
                 if (data.lines && data.lines.length) {
                     tileInfo.vectors.lines = buildBatch(data.lines);
+                }
+                if (data.points && data.points.length) {
+                    tileInfo.vectors.points = buildBatch(data.points);
                 }
 
                 return Promise.resolve(tileInfo);
@@ -999,6 +1005,11 @@
                     gl.deleteBuffer(data.vectors.lines.vboPos);
                     gl.deleteBuffer(data.vectors.lines.vboCol);
                     gl.deleteBuffer(data.vectors.lines.ibo);
+                }
+                if (data.vectors.points) {
+                    gl.deleteBuffer(data.vectors.points.vboPos);
+                    gl.deleteBuffer(data.vectors.points.vboCol);
+                    gl.deleteBuffer(data.vectors.points.ibo);
                 }
                 data.vectors = null;
             }

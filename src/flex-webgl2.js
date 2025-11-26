@@ -822,6 +822,25 @@ void main() {
                         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
                         gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
                     }
+
+                    batch = vectorTile.points;
+                    if (batch) {
+                        if (!vectorTile.fills && !vectorTile.lines) {
+                            gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
+                        }
+
+                        // Bind positions
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+
+                        // Bind per-vertex colors (normalized u8 → float 0..1)
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
+                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.UNSIGNED_BYTE, true, 0, 0);
+
+                        // Bind indices and draw one instance
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                    }
                 }
                 gl.uniform2f(this._renderClipping, 0, 0);
             }
