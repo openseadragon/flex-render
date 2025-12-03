@@ -252,6 +252,7 @@
 
             const webglProgram = this.gl.createProgram();
             program._webGLProgram = webglProgram;
+            program._justCreated = true;
 
             // TODO inner control type udpates are not checked here
             for (let shaderId in this._shaders) {
@@ -298,9 +299,14 @@
                 program = this.getProgram(program);
             }
 
-            if (this.running && this._program === program) {
-                return false;
-            } else if (this._program) {
+            if (this._program) {
+                const reused = !program._justCreated;
+                if (this.running && this._program === program && reused) {
+                    return false;
+                }
+                if (reused) {
+                    program._justCreated = false;
+                }
                 this._program.unload();
             }
 
