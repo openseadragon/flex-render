@@ -517,6 +517,9 @@
                             if (tileInfo.vectors.lines) {
                                 tileInfo.vectors.lines.matrix = transformMatrix;
                             }
+                            if (tileInfo.vectors.points) {
+                                tileInfo.vectors.points.matrix = transformMatrix;
+                            }
                             vecPayload.push(tileInfo.vectors);
                         }
                     }
@@ -557,10 +560,8 @@
 
             // todo flatten render data
 
-            if (!TI_PAYLOAD.length) {
-                this.renderer.gl.clear(gl.COLOR_BUFFER_BIT);
-                return false;
-            }
+            this.renderer.gl.clear(gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
+
             this.renderer.firstPassProcessData(TI_PAYLOAD);
             return true;
         }
@@ -781,7 +782,7 @@
             }
 
             // NEW: vector geometry path (pre-tessellated triangles in tile UV space 0..1)
-            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines))) {
+            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines || data.points))) {
                 const tileInfo = { texture: null, position: null, vectors: {} };
 
                 const buildBatch = (meshes) => {
@@ -850,6 +851,9 @@
                 }
                 if (data.lines && data.lines.length) {
                     tileInfo.vectors.lines = buildBatch(data.lines);
+                }
+                if (data.points && data.points.length) {
+                    tileInfo.vectors.points = buildBatch(data.points);
                 }
 
                 return Promise.resolve(tileInfo);
@@ -999,6 +1003,11 @@
                     gl.deleteBuffer(data.vectors.lines.vboPos);
                     gl.deleteBuffer(data.vectors.lines.vboCol);
                     gl.deleteBuffer(data.vectors.lines.ibo);
+                }
+                if (data.vectors.points) {
+                    gl.deleteBuffer(data.vectors.points.vboPos);
+                    gl.deleteBuffer(data.vectors.points.vboCol);
+                    gl.deleteBuffer(data.vectors.points.ibo);
                 }
                 data.vectors = null;
             }

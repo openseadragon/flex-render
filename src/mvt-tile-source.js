@@ -56,7 +56,8 @@ $.MVTTileSource = class extends $.TileSource {
                 for (const ctx of waiters) {
                     ctx.finish({
                         fills: t.fills.map(packMesh),
-                        lines: t.lines.map(packMesh)
+                        lines: t.lines.map(packMesh),
+                        points: t.points.map(packMesh),
                     }, undefined, 'vector-mesh');
                 }
             } else {
@@ -167,15 +168,21 @@ function defaultStyle() {
     // layerName => {type:'fill'|'line', color:[r,g,b,a], widthPx?:number, join?:'miter'|'bevel'|'round', cap?:'butt'|'square'|'round'}
     return {
         layers: {
-            water:     { type: 'fill', color: [0.65, 0.80, 0.93, 1] },
-            landuse:   { type: 'fill', color: [0.95, 0.94, 0.91, 1] },
-            park:      { type: 'fill', color: [0.88, 0.95, 0.88, 1] },
-            building:  { type: 'fill', color: [0.93, 0.93, 0.93, 1] },
-            waterway:  { type: 'line', color: [0.55, 0.75, 0.90, 1], widthPx: 1.2, join: 'round', cap: 'round' },
-            road:      { type: 'line', color: [0.60, 0.60, 0.60, 1], widthPx: 1.5, join: 'round', cap: 'round' },
+            water:          { type: 'fill', color: [0.10, 0.80, 0.80, 0.80] },
+            waterway:       { type: 'line', color: [0.10, 0.10, 0.80, 1.00], widthPx: 1.2, join: 'round', cap: 'round' },
+            landcover:      { type: 'fill', color: [0.10, 0.80, 0.10, 0.80] },
+            landuse:        { type: 'fill', color: [0.80, 0.80, 0.10, 0.80] },
+            park:           { type: 'fill', color: [0.10, 0.80, 0.10, 0.80] },
+            boundary:       { type: 'line', color: [0.60, 0.20, 0.60, 1.00], widthPx: 2.0, join: 'round', cap: 'round' },
+            aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.80] },
+            transportation: { type: 'line', color: [0.80, 0.60, 0.10, 1.00], widthPx: 1.6, join: 'round', cap: 'round' },
+            building:       { type: 'fill', color: [0.10, 0.10, 0.10, 0.80] },
+            road:           { type: 'line', color: [0.60, 0.60, 0.60, 1.00], widthPx: 1.6, join: 'round', cap: 'round' },
+            poi:            { type: 'point', color: [0.00, 0.00, 0.00, 1.00], size: 10.0 },
+            housenumber:    { type: 'point', color: [0.50, 0.00, 0.50, 1.00], size: 8.0 },
         },
         // Default if layer not listed
-        fallback: { type: 'line', color: [0.3, 0.3, 0.3, 1], widthPx: 1, join: 'bevel', cap: 'butt' }
+        fallback: { type: 'line', color: [0.50, 0.50, 0.50, 1.00], widthPx: 0.8, join: 'bevel', cap: 'butt' }
     };
 }
 
