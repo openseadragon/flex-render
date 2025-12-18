@@ -695,16 +695,6 @@
         }
 
         /**
-         * @param {TiledImage} tiledImage the tiled image that is calling the function
-         * @returns {Boolean} Whether this drawer requires enforcing minimum tile overlap to avoid showing seams.
-         * @private
-         */
-        minimumOverlapRequired(tiledImage) {
-            // return true if the tiled image is tainted, since the backup canvas drawer will be used.
-            return tiledImage.isTainted();
-        }
-
-        /**
          * Creates an HTML element into which will be drawn.
          * @private
          * @returns {HTMLCanvasElement} the canvas to draw into
