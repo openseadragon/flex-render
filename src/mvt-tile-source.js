@@ -168,15 +168,15 @@ function defaultStyle() {
     // layerName => {type:'fill'|'line', color:[r,g,b,a], widthPx?:number, join?:'miter'|'bevel'|'round', cap?:'butt'|'square'|'round'}
     return {
         layers: {
-            water:          { type: 'fill', color: [0.10, 0.80, 0.80, 0.40] },
+            water:          { type: 'fill', color: [0.10, 0.80, 0.80, 0.80] },
             waterway:       { type: 'line', color: [0.10, 0.10, 0.80, 1.00], widthPx: 1.2, join: 'round', cap: 'round' },
-            landcover:      { type: 'fill', color: [0.10, 0.80, 0.10, 0.40] },
-            landuse:        { type: 'fill', color: [0.80, 0.80, 0.10, 0.40] },
-            park:           { type: 'fill', color: [0.10, 0.80, 0.10, 0.60] },
+            landcover:      { type: 'fill', color: [0.10, 0.80, 0.10, 0.80] },
+            landuse:        { type: 'fill', color: [0.80, 0.80, 0.10, 0.80] },
+            park:           { type: 'fill', color: [0.10, 0.80, 0.10, 0.80] },
             boundary:       { type: 'line', color: [0.60, 0.20, 0.60, 1.00], widthPx: 2.0, join: 'round', cap: 'round' },
-            aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.00] },
+            aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.80] },
             transportation: { type: 'line', color: [0.80, 0.60, 0.10, 1.00], widthPx: 1.6, join: 'round', cap: 'round' },
-            building:       { type: 'fill', color: [0.10, 0.10, 0.10, 0.60] },
+            building:       { type: 'fill', color: [0.10, 0.10, 0.10, 0.80] },
             road:           { type: 'line', color: [0.60, 0.60, 0.60, 1.00], widthPx: 1.6, join: 'round', cap: 'round' },
             poi:            { type: 'point', color: [0.00, 0.00, 0.00, 1.00], size: 10.0 },
             housenumber:    { type: 'point', color: [0.50, 0.00, 0.50, 1.00], size: 8.0 },
