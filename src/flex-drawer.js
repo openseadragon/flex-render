@@ -560,10 +560,8 @@
 
             // todo flatten render data
 
-            if (!TI_PAYLOAD.length) {
-                this.renderer.gl.clear(gl.COLOR_BUFFER_BIT);
-                return false;
-            }
+            this.renderer.gl.clear(gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
+
             this.renderer.firstPassProcessData(TI_PAYLOAD);
             return true;
         }

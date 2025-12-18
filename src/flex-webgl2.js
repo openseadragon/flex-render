@@ -266,6 +266,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         if (remainingBlenForShaderID) {
             execution += getRemainingBlending();
         }
+
         this.vertexShader = this._getVertexShaderSource();
         this.fragmentShader = this._getFragmentShaderSource(definition, execution,
             customBlendFunctions, $.FlexRenderer.ShaderLayer.__globalIncludes);
@@ -534,7 +535,7 @@ in vec4 v_vecColor;
 uniform sampler2D u_textures[${this._maxTextures}];
 
 layout(location=0) out vec4 outputColor;
-layout(location=1) out float outputStencil;
+layout(location=1) out vec4 outputStencil;
 
 void main() {
     if (u_renderClippingParams.x < 0.5) {
@@ -549,11 +550,11 @@ void main() {
                  break;
             }
         }
-        outputStencil = 1.0;
+        outputStencil = vec4(1.0);
     } else if (u_renderClippingParams.y > 0.5) {
         // Vector geometry draw path (per-vertex color)
         outputColor = v_vecColor;
-        outputStencil = 1.0;
+        outputStencil = vec4(1.0);
     } else {
         // Pure clipping path: write only to stencil (color target value is undefined)
         outputColor = vec4(0.0);
@@ -607,8 +608,6 @@ void main() {
         gl.enableVertexAttribArray(this._positionsBuffer);
         gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
         this._geomSingleMatrix = gl.getUniformLocation(program, "u_geomMatrix");
-
-
 
         /*
          * Rendering vector tiles. Positions of tiles are always rectangular (stretched and moved by the matrix),
@@ -679,7 +678,9 @@ void main() {
      */
     load() {
         this.gl.uniform1iv(this._inputTexturesLoc, this._textureIndexes);
-        this.gl.disable(this.gl.BLEND);
+
+        this.gl.enable(this.gl.BLEND);
+        this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
     }
 
     /**
@@ -687,7 +688,9 @@ void main() {
      */
     use(renderOutput, sourceArray, options) {
         const gl = this.gl;
+
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
+
         gl.enable(gl.STENCIL_TEST);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, this.stencilClipBuffer);
 
@@ -703,11 +706,14 @@ void main() {
             this._tempMatrixData = new Float32Array(this._maxTextures * 9);
             this._tempTexCoords = new Float32Array(this._maxTextures * 8);
         }
+
         let wasClipping = true; // force first init (~ as if was clipping was true)
 
         for (const renderInfo of sourceArray) {
             const rasterTiles = renderInfo.tiles;
+
             const attachments = [];
+
             // for (let i = 0; i < 1; i++) {
                 gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
                     this.fpTexture, 0, this._renderOffset);
@@ -717,6 +723,7 @@ void main() {
                     this.fpTextureClip, 0, this._renderOffset);
                 attachments.push(gl.COLOR_ATTACHMENT0 + 1);
             //}
+
             gl.drawBuffers(attachments);
             gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
 
@@ -856,6 +863,7 @@ void main() {
         }
         renderOutput.texture = this.fpTexture;
         renderOutput.stencil = this.fpTextureClip;
+
         return renderOutput;
     }
 

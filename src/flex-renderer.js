@@ -204,13 +204,17 @@
          */
         firstPassProcessData(source) {
             const program = this._programImplementations[this.webglContext.firstPassProgramKey];
+
             if (this.useProgram(program, "first-pass")) {
                 program.load();
             }
+
             const result = program.use(this.__firstPassResult, source, undefined);
+
             if (this.debug) {
                 this._showOffscreenMatrix(result, source.length, {scale: 0.5, pad: 8});
             }
+
             this.__firstPassResult = result;
             this.__firstPassResult.sourcesLength = source.length;
             return result;
@@ -224,9 +228,11 @@
          */
         secondPassProcessData(renderArray, options = undefined) {
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
+
             if (this.useProgram(program, "second-pass")) {
                 program.load(renderArray);
             }
+
             return program.use(this.__firstPassResult, renderArray, options);
         }
 
