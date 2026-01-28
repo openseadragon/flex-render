@@ -18,7 +18,7 @@ self.onmessage = async (e) => {
             const buf = await resp.arrayBuffer();
             const vt = new self.vectorTile.VectorTile(new self.Pbf(new Uint8Array(buf)));
 
-            const fills = [], lines = [];
+            const fills = [], lines = [], points = [];
             // Iterate layers
             for (const lname in vt.layers) {
                 const lyr = vt.layers[lname];
@@ -60,6 +60,22 @@ self.onmessage = async (e) => {
                             }
                         }
                     }
+                    if (feat.type === 1 && fstyle.type === 'point') {
+                        const size = (fstyle.size || 10.0) / 2.0
+                        const verts = [];
+                        const idx = [0, 1, 2, 0, 2, 3];
+                        for (let p=0;p<geom.length;p++) {
+                            const pts = geom[p];
+                            for (let pi=0;pi<pts.length;pi++) {
+                                const pt = pts[pi];
+                                verts.push((pt.x + size)/lyr.extent, (pt.y - size)/lyr.extent);
+                                verts.push((pt.x - size)/lyr.extent, (pt.y - size)/lyr.extent);
+                                verts.push((pt.x - size)/lyr.extent, (pt.y + size)/lyr.extent);
+                                verts.push((pt.x + size)/lyr.extent, (pt.y + size)/lyr.extent);
+                            }
+                        }
+                        points.push({ vertices: new Float32Array(verts).buffer, indices: new Uint32Array(idx).buffer, color: fstyle.color })
+                    }
                 }
             }
 
@@ -67,7 +83,8 @@ self.onmessage = async (e) => {
             const transfer = [];
             for (const a of fills) { transfer.push(a.vertices, a.indices); }
             for (const a of lines) { transfer.push(a.vertices, a.indices); }
-            self.postMessage({ type:'tile', key, ok:true, data:{ fills, lines } }, transfer);
+            for (const a of points) { transfer.push(a.vertices, a.indices); }
+            self.postMessage({ type:'tile', key, ok:true, data:{ fills, lines, points } }, transfer);
         }
     } catch (err) {
         self.postMessage({ type:'tile', key: e.data && e.data.key, ok:false, error: String(err) });
