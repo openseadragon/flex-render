@@ -123,6 +123,10 @@
             throw("$.FlexRenderer.WebGLImplementation::sampleTexture() must be implemented!");
         }
 
+        sampleTextureAtlas() {
+            throw("$.FlexRenderer.WebGLImplementation::sampleTextureAtlas() must be implemented!");
+        }
+
         getTextureSize() {
             throw("$.FlexRenderer.WebGLImplementation::getTextureSize() must be implemented!");
         }
@@ -345,13 +349,15 @@
         }
 
         /**
-         * Add an image. Returns a stable atlasId.
+         * Add an image. Returns a stable textureId.
          * @param {ImageBitmap|HTMLImageElement|HTMLCanvasElement|ImageData|Uint8Array} source
-         * @param {number} [w]
-         * @param {number} [h]
+         * @param {{
+         *   width?: number,
+         *   height?: number,
+         * }} [opts]
          * @returns {number}
          */
-        addImage(source, w, h) {
+        addImage(source, opts) {
             throw new Error('TextureAtlas2DArray.addImage: not implemented');
         }
 
@@ -359,8 +365,7 @@
          * Texture atlas works as a single texture unit. Bind the atlas before using it at desired texture unit.
          * @param textureUnit
          */
-        bind(textureUnit) {
-        }
+        bind(textureUnit) {}
 
         /**
          * Get WebGL Atlas shader code. This code must define the following function:

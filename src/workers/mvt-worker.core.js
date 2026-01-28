@@ -1,93 +1,191 @@
 // libs (Pbf, vectorTile, earcut) are concatenated before this file
 
-let EXTENT = 4096; let STYLE = {layers:{},fallback:{type:'line',color:[0,0,0,1],widthPx:1,join:'bevel',cap:'butt'}};
+let EXTENT = 4096;
+let STYLE = {
+    layers: {},
+    fallback: { type: 'line', color: [0, 0, 0, 1], widthPx: 1, join: 'bevel', cap: 'butt' }
+};
+
 self.onmessage = async (e) => {
     const msg = e.data;
+
     try {
         if (msg.type === 'config') {
-            EXTENT = msg.extent || EXTENT; STYLE = msg.style || STYLE; return;
+            EXTENT = msg.extent || EXTENT;
+            STYLE = msg.style || STYLE;
+            return;
         }
+
         if (msg.type === 'tile') {
             const {key, url, z, x, y} = msg;
+
+            let tileDepth = (z << 2) + (2 * (y % 2) + (x % 2)) + 1; // we only need 2 bits to encode for the 4 possibilities for the combination of x and y
+
             // lazy-load libs
             if (!self.Pbf || !self.vectorTile || !self.earcut) {
                 throw new Error('Missing libs');
             }
             const resp = await fetch(url);
-            if (!resp.ok) throw new Error('HTTP '+resp.status);
+
+            if (!resp.ok) {
+                throw new Error('HTTP ' + resp.status);
+            }
+
             const buf = await resp.arrayBuffer();
             const vt = new self.vectorTile.VectorTile(new self.Pbf(new Uint8Array(buf)));
 
-            const fills = [], lines = [], points = [];
+            const fills = [];
+            const lines = [];
+            const points = [];
+            const icons = [];
+
             // Iterate layers
             for (const lname in vt.layers) {
                 const lyr = vt.layers[lname];
                 const lstyle = STYLE.layers[lname] || STYLE.fallback;
-                for (let i=0;i<lyr.length;i++) {
-                    const feat = lyr.feature(i);
+
+                for (let f = 0; f < lyr.length; f++) {
+                    const feat = lyr.feature(f);
                     const geom = feat.loadGeometry();
                     const fstyle = lstyle; // TODO: evaluate by properties/zoom if needed
+
                     if (feat.type === 3 && fstyle.type === 'fill') {
                         // Polygon with holes; MVT ring rule: outer CW, holes CCW (y down)
                         const polys = classifyRings(geom);
                         for (const poly of polys) {
-                            const flat = []; const holes = []; let len=0;
-                            for (let r=0;r<poly.length;r++) {
+                            const flat = [];
+                            const holes = [];
+                            let len = 0;
+
+                            for (let r = 0; r < poly.length; r++) {
                                 const ring = poly[r];
-                                if (r>0) holes.push(len);
-                                for (let k=0;k<ring.length;k++){ const p=ring[k]; flat.push(p.x, p.y); len++; }
+
+                                if (r > 0) {
+                                    holes.push(len);
+                                }
+
+                                for (let k = 0; k < ring.length; k++) {
+                                    const p = ring[k];
+                                    flat.push(p.x, p.y);
+                                    len++;
+                                }
                             }
+
                             const idx = self.earcut(flat, holes, 2);
+
                             if (idx.length) {
                                 // Normalize to 0..1 UV for the renderer
-                                const verts = new Float32Array(flat.length);
-                                for (let j=0;j<flat.length;j+=2){ verts[j] = flat[j]/lyr.extent; verts[j+1] = flat[j+1]/lyr.extent; }
+                                const vertCount = flat.length / 2;
+                                const verts = new Float32Array(4 * vertCount);
+                                for (let v = 0; v < vertCount; v += 1) {
+                                    verts[4 * v + 0] = flat[2 * v + 0] / lyr.extent;
+                                    verts[4 * v + 1] = flat[2 * v + 1] / lyr.extent;
+                                    verts[4 * v + 2] = tileDepth;
+                                    verts[4 * v + 3] = -1;
+                                }
                                 fills.push({ vertices: verts.buffer, indices: new Uint32Array(idx).buffer, color: fstyle.color });
                             }
                         }
                     }
+
                     if (feat.type === 2 && fstyle.type === 'line') {
                         // Build stroke triangles (bevel joins + requested caps; miter threshold)
                         const widthPx = fstyle.widthPx || 1.0;
                         const widthTile = widthPx * (lyr.extent / (512)); // heuristic: px@512 tile
-                        for (let p=0;p<geom.length;p++) {
+                        for (let p = 0; p < geom.length; p++) {
                             const pts = geom[p];
-                            const mesh = strokePoly(pts, widthTile, fstyle.join||'bevel', fstyle.cap||'butt', fstyle.miterLimit||2.0);
+                            const mesh = strokePoly(pts, widthTile, fstyle.join || 'bevel', fstyle.cap || 'butt', fstyle.miterLimit || 2.0);
                             if (mesh && mesh.indices.length) {
-                                const verts = new Float32Array(mesh.vertices.length);
-                                for (let j=0;j<mesh.vertices.length;j+=2){ verts[j] = mesh.vertices[j]/lyr.extent; verts[j+1] = mesh.vertices[j+1]/lyr.extent; }
+                                const vertCount = mesh.vertices.length / 2;
+                                const verts = new Float32Array(4 * vertCount);
+                                for (let v = 0; v < vertCount; v += 1) {
+                                    verts[4 * v + 0] = mesh.vertices[2 * v + 0] / lyr.extent;
+                                    verts[4 * v + 1] = mesh.vertices[2 * v + 1] / lyr.extent;
+                                    verts[4 * v + 2] = tileDepth;
+                                    verts[4 * v + 3] = -1;
+                                }
                                 lines.push({ vertices: verts.buffer, indices: new Uint32Array(mesh.indices).buffer, color: fstyle.color });
                             }
                         }
                     }
+
                     if (feat.type === 1 && fstyle.type === 'point') {
-                        const size = (fstyle.size || 10.0) / 2.0
+                        const size = (fstyle.size || 10.0) / 2.0;
                         const verts = [];
                         const idx = [0, 1, 2, 0, 2, 3];
-                        for (let p=0;p<geom.length;p++) {
+                        for (let p = 0; p < geom.length; p++) {
                             const pts = geom[p];
-                            for (let pi=0;pi<pts.length;pi++) {
+                            for (let pi = 0; pi < pts.length; pi += 1) {
                                 const pt = pts[pi];
-                                verts.push((pt.x + size)/lyr.extent, (pt.y - size)/lyr.extent);
-                                verts.push((pt.x - size)/lyr.extent, (pt.y - size)/lyr.extent);
-                                verts.push((pt.x - size)/lyr.extent, (pt.y + size)/lyr.extent);
-                                verts.push((pt.x + size)/lyr.extent, (pt.y + size)/lyr.extent);
+                                verts.push((pt.x + size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
+                                verts.push((pt.x - size) / lyr.extent, (pt.y - size) / lyr.extent, tileDepth, -1);
+                                verts.push((pt.x - size) / lyr.extent, (pt.y + size) / lyr.extent, tileDepth, -1);
+                                verts.push((pt.x + size) / lyr.extent, (pt.y + size) / lyr.extent, tileDepth, -1);
                             }
                         }
-                        points.push({ vertices: new Float32Array(verts).buffer, indices: new Uint32Array(idx).buffer, color: fstyle.color })
+                        points.push({ vertices: new Float32Array(verts).buffer, indices: new Uint32Array(idx).buffer, color: fstyle.color });
+                    }
+
+                    if (feat.type === 1 && fstyle.type === 'icon') {
+                        const size = fstyle.size || 1.0;
+                        const icon = fstyle.iconMapping[feat.properties.class] || { textureId: -1, width: 16, height: 16 };
+
+                        const verts = [];
+                        const idx = [0, 1, 3, 0, 2, 3];
+                        const parameters = [];
+
+                        for (let p = 0; p < geom.length; p++) {
+                            const pts = geom[p];
+                            for (let pi = 0; pi < pts.length; pi += 1) {
+                                const pt = pts[pi];
+
+                                const width = size * icon.width;
+                                const height = size * icon.height;
+
+                                const xStart = (pt.x - (width / 2.0)) / lyr.extent;
+                                const xEnd = (pt.x + (width / 2.0)) / lyr.extent;
+                                const yStart = (pt.y - (height / 2.0)) / lyr.extent;
+                                const yEnd = (pt.y + (height / 2.0)) / lyr.extent;
+
+                                verts.push(xStart, yStart, tileDepth, icon.textureId);
+                                verts.push(xEnd, yStart, tileDepth, icon.textureId);
+                                verts.push(xStart, yEnd, tileDepth, icon.textureId);
+                                verts.push(xEnd, yEnd, tileDepth, icon.textureId);
+
+                                for (let i = 0; i < 4; i += 1) {
+                                    parameters.push(xStart, yStart, width / lyr.extent, height / lyr.extent);
+                                }
+                            }
+                        }
+
+                        icons.push({ vertices: new Float32Array(verts).buffer, indices: new Uint32Array(idx).buffer, parameters: new Float32Array(parameters).buffer });
                     }
                 }
             }
 
             // Transfer buffers
             const transfer = [];
-            for (const a of fills) { transfer.push(a.vertices, a.indices); }
-            for (const a of lines) { transfer.push(a.vertices, a.indices); }
-            for (const a of points) { transfer.push(a.vertices, a.indices); }
-            self.postMessage({ type:'tile', key, ok:true, data:{ fills, lines, points } }, transfer);
+
+            for (const a of fills) {
+                transfer.push(a.vertices, a.indices);
+            }
+
+            for (const a of lines) {
+                transfer.push(a.vertices, a.indices);
+            }
+
+            for (const a of points) {
+                transfer.push(a.vertices, a.indices);
+            }
+
+            for (const a of icons) {
+                transfer.push(a.vertices, a.indices, a.parameters);
+            }
+
+            self.postMessage({ type: 'tile', key, ok: true, data: { fills, lines, points, icons } }, transfer);
         }
     } catch (err) {
-        self.postMessage({ type:'tile', key: e.data && e.data.key, ok:false, error: String(err) });
+        self.postMessage({ type: 'tile', key: e.data && e.data.key, ok: false, error: String(err) });
     }
 };
 

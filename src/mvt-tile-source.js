@@ -58,6 +58,7 @@ $.MVTTileSource = class extends $.TileSource {
                         fills: t.fills.map(packMesh),
                         lines: t.lines.map(packMesh),
                         points: t.points.map(packMesh),
+                        icons: t.icons.map(packMesh),
                     }, undefined, 'vector-mesh');
                 }
             } else {
@@ -160,8 +161,27 @@ function packMesh(m) {
         vertices: new Float32Array(m.vertices),
         indices: new Uint32Array(m.indices),
         color: m.color || [1, 0, 0, 1],
+        parameters: m.parameters ? new Float32Array(m.parameters) : undefined,
     };
 }
+
+const iconMapping = {
+    country: {
+        textureId: 0,
+        width: 256,
+        height: 256,
+    },
+    city: {
+        textureId: 1,
+        width: 256,
+        height: 256,
+    },
+    village: {
+        textureId: 2,
+        width: 256,
+        height: 256,
+    },
+};
 
 function defaultStyle() {
     // Super-minimal style mapping; replace as needed.
@@ -169,17 +189,23 @@ function defaultStyle() {
     return {
         layers: {
             water:          { type: 'fill', color: [0.10, 0.80, 0.80, 0.80] },
-            waterway:       { type: 'line', color: [0.10, 0.10, 0.80, 1.00], widthPx: 1.2, join: 'round', cap: 'round' },
             landcover:      { type: 'fill', color: [0.10, 0.80, 0.10, 0.80] },
             landuse:        { type: 'fill', color: [0.80, 0.80, 0.10, 0.80] },
             park:           { type: 'fill', color: [0.10, 0.80, 0.10, 0.80] },
             boundary:       { type: 'line', color: [0.60, 0.20, 0.60, 1.00], widthPx: 2.0, join: 'round', cap: 'round' },
-            aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.80] },
+            waterway:       { type: 'line', color: [0.10, 0.10, 0.80, 1.00], widthPx: 1.2, join: 'round', cap: 'round' },
             transportation: { type: 'line', color: [0.80, 0.60, 0.10, 1.00], widthPx: 1.6, join: 'round', cap: 'round' },
-            building:       { type: 'fill', color: [0.10, 0.10, 0.10, 0.80] },
             road:           { type: 'line', color: [0.60, 0.60, 0.60, 1.00], widthPx: 1.6, join: 'round', cap: 'round' },
+            building:       { type: 'fill', color: [0.10, 0.10, 0.10, 0.80] },
+            aeroway:        { type: 'fill', color: [0.10, 0.80, 0.60, 0.80] },
             poi:            { type: 'point', color: [0.00, 0.00, 0.00, 1.00], size: 10.0 },
             housenumber:    { type: 'point', color: [0.50, 0.00, 0.50, 1.00], size: 8.0 },
+            place:          {
+                type: 'icon',
+                color: [0.80, 0.10, 0.10, 1.00],
+                size: 1.2,
+                iconMapping: iconMapping, // TODO: somehow pass a function instead?
+            },
         },
         // Default if layer not listed
         fallback: { type: 'line', color: [0.50, 0.50, 0.50, 1.00], widthPx: 0.8, join: 'bevel', cap: 'butt' }
