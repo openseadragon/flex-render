@@ -518,7 +518,6 @@
             return this.webglContext.getTextureSize(otherDataIndex);
         }
 
-
         // BLENDING LOGIC
         /**
          * Set blending mode.

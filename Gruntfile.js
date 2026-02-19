@@ -42,6 +42,7 @@ module.exports = function(grunt) {
             "src/flex-layers/edge-isoline.js",
             "src/flex-layers/heatmap.js",
             "src/flex-layers/sobel.js",
+            "src/flex-layers/texture.js",
             "src/flex-layers/time-series.js",
             "src/mvt-tile-source.js",
             "src/fabric-tile-source.js",
@@ -70,7 +71,7 @@ module.exports = function(grunt) {
 
     let moduleFilter =  '';
     if (grunt.option('module')) {
-        moduleFilter = '?module=' + grunt.option('module')
+        moduleFilter = '?module=' + grunt.option('module');
     }
 
     // ----------
@@ -303,6 +304,14 @@ module.exports = function(grunt) {
         grunt.file.write(reportPath, JSON.stringify(coverage));
     });
 
+    // Copy:build task.
+    // Copies icon files into the appropriate location in the build folder
+    grunt.registerTask("copy:build", function() {
+        grunt.file.recurse("icons", function(abspath, rootdir, subdir, filename) {
+            grunt.file.copy(abspath, "build/openseadragon/icons/" + (subdir ? (subdir + "/") : "") + filename);
+        });
+    });
+
     // ----------
     // Copy:package task.
     // Creates a directory tree to be compressed into a package.
@@ -364,14 +373,14 @@ module.exports = function(grunt) {
         "concat:mvtWorkerPre", "concat:mvtWorkerPost",
         "concat:fabricWorkerPre", "concat:fabricWorkerPost",
         "concat:dist", "uglify",
-        "replace:cleanPaths"
+        "replace:cleanPaths", "copy:build"
     ]);
 
     // ----------
     // Minimal build task.
     // For use during development as desired. Creates only the unminified version.
     grunt.registerTask("minbuild", [
-        "git-describe", "concat"
+        "git-describe", "concat", "copy:build"
     ]);
 
     // ----------

@@ -20,10 +20,31 @@
     }
 
     init() {
-        const textureAtlas = this.atlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
+        this.firstAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
+
+        const countryIcon = new Image();
+        countryIcon.src = "/icons/place/country-icon.png";
+        countryIcon.onload = () => {
+            this.firstAtlas.addImage(countryIcon);
+        };
+
+        const cityIcon = new Image();
+        cityIcon.src = "/icons/place/city-icon.png";
+        cityIcon.onload = () => {
+            this.firstAtlas.addImage(cityIcon);
+        };
+
+        const villageIcon = new Image();
+        villageIcon.src = "/icons/place/village-icon.png";
+        villageIcon.onload = () => {
+            this.firstAtlas.addImage(villageIcon);
+        };
+
+        this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
+
         //todo consider passing reference to this
-        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, textureAtlas), "firstPass");
-        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, textureAtlas), "secondPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, this.firstAtlas), "firstPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, this.secondAtlas), "secondPass");
     }
 
     getVersion() {
@@ -38,6 +59,10 @@
         return `osd_texture(${index}, ${vec2coords})`;
     }
 
+    sampleTextureAtlas(textureId, vec2coords) {
+        return `osd_atlas_texture(${textureId}, ${vec2coords})`;
+    }
+
     getTextureSize(index) {
         return `osd_texture_size(${index})`;
     }
@@ -49,7 +74,8 @@
     }
 
     destroy() {
-        this.atlas.destroy();
+        this.firstAtlas.destroy();
+        this.secondAtlas.destroy();
     }
 
     getBlendingFunction(name) {
@@ -163,7 +189,7 @@ return blendAlpha(fg, bg, bg.rgb + fg.rgb - 2.0 * bg.rgb * fg.rgb);`,
 $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgram {
     constructor(context, gl, atlas) {
         super(context, gl, atlas);
-        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
+        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32) - 1; // subtracting 1 to allow texture atlas to be bound; TODO: only bind texture atlas when it is needed
         //todo this might be limiting in some wild cases... make it configurable..? or consider 1d texture
         this.textureMappingsUniformSize = 64;
     }
@@ -176,6 +202,7 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
                 '', $.FlexRenderer.ShaderLayer.__globalIncludes);
             return;
         }
+
         let definition = '',
             execution = `
 vec4 intermediate_color = vec4(.0);
@@ -337,7 +364,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
         gl.uniform1i(this._stencilLocation, 1);
 
-        this.atlas.bind(gl.TEXTURE2);
+        this.atlas.bind(gl.TEXTURE2, 2);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.bindVertexArray(null);
@@ -473,7 +500,7 @@ $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgra
      */
     constructor(context, gl, atlas) {
         super(context, gl, atlas);
-        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32);
+        this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32) - 1; // subtracting 1 to allow texture atlas to be bound; TODO: only bind texture atlas when it is needed
         this._textureIndexes = [...Array(this._maxTextures).keys()];
         // Todo: RN we support only MAX_COLOR_ATTACHMENTS in the texture array, which varies beetween devices
         //   make the first pass shader run multiple times if the number does not suffice
@@ -487,14 +514,16 @@ precision mediump float;
 
 layout(location = 0) in mat3 a_transform_matrix;
 // Generic payload args. Used for texture positions, vector positions and colors.
-layout(location = 4) in vec4 a_payload0; // first 4 texture coords or positions
-layout(location = 5) in vec4 a_payload1; // second 4 texture coords or colors
+layout(location = 4) in vec4 a_payload0; // first 4 raster texture coords or vector positions and atlas texture ID (x, y, z, textureId)
+layout(location = 5) in vec4 a_payload1; // second 4 raster texture coords or vector colors or icon parameters (x, y, width, height)
 
 uniform vec2 u_renderClippingParams;
 uniform mat3 u_geomMatrix;
 
-out vec2 v_texture_coords;
 flat out int instance_id;
+out vec2 v_texture_coords;
+out float v_vecDepth;
+flat out int v_textureId;
 out vec4 v_vecColor;
 
 const vec3 viewport[4] = vec3[4] (
@@ -505,10 +534,14 @@ const vec3 viewport[4] = vec3[4] (
 );
 
 void main() {
-    int vid = gl_VertexID & 3;
-    v_texture_coords = (vid == 0) ? a_payload0.xy :
-        (vid == 1) ? a_payload0.zw :
-             (vid == 2) ? a_payload1.xy : a_payload1.zw;
+    if (u_renderClippingParams.y > 0.5) {
+        v_texture_coords = vec2((a_payload0.x - a_payload1.x) / a_payload1.z, (a_payload0.y - a_payload1.y) / a_payload1.w);
+    } else {
+        int vid = gl_VertexID & 3;
+        v_texture_coords = (vid == 0) ? a_payload0.xy :
+            (vid == 1) ? a_payload0.zw :
+                (vid == 2) ? a_payload1.xy : a_payload1.zw;
+    }
 
     mat3 matrix = u_renderClippingParams.y > 0.5 ? u_geomMatrix : a_transform_matrix;
 
@@ -516,6 +549,8 @@ void main() {
         matrix * vec3(a_payload0.xy, 1.0) :
         matrix * viewport[gl_VertexID];
 
+    v_vecDepth = a_payload0.z;
+    v_textureId = int(a_payload0.w);
     v_vecColor = a_payload1;
 
     gl_Position = vec4(space_2d.xy, 1.0, space_2d.z);
@@ -526,13 +561,19 @@ void main() {
 precision mediump int;
 precision mediump float;
 precision mediump sampler2D;
+precision mediump sampler2DArray;
 
 uniform vec2 u_renderClippingParams;
 
 flat in int instance_id;
 in vec2 v_texture_coords;
+in float v_vecDepth;
+flat in int v_textureId;
 in vec4 v_vecColor;
+
 uniform sampler2D u_textures[${this._maxTextures}];
+
+${this.atlas.getFragmentShaderDefinition()}
 
 layout(location=0) out vec4 outputColor;
 layout(location=1) out vec4 outputStencil;
@@ -550,14 +591,33 @@ void main() {
                  break;
             }
         }
+
         outputStencil = vec4(1.0);
+        gl_FragDepth = gl_FragCoord.z;
     } else if (u_renderClippingParams.y > 0.5) {
         // Vector geometry draw path (per-vertex color)
-        outputColor = v_vecColor;
-        outputStencil = vec4(1.0);
+
+        vec4 stencil = vec4(1.0);
+        float depth = v_vecDepth / 255.0; // 2 ^ 8 - 1; 6 bits for z and 2 bits for y and x; assuming the maximal zoom level of tiles to be 64 (no other implementations seem to go past 25 so this should be plenty)
+
+        if (v_textureId < 0) {
+            outputColor = v_vecColor;
+        } else {
+            vec4 texColor = osd_atlas_texture(v_textureId, v_texture_coords); // required for icon rendering, needs texture atlas to be bound; TODO: use osd_atlas_texture only when texture atlas is bound
+            outputColor = texColor;
+
+            if (texColor.a < 1.0) {
+                stencil = vec4(0.0);
+                depth = 0.0;
+            }
+        }
+
+        outputStencil = stencil;
+        gl_FragDepth = depth;
     } else {
         // Pure clipping path: write only to stencil (color target value is undefined)
-        outputColor = vec4(0.0);
+        outputStencil = vec4(0.0);
+        gl_FragDepth = 0.0;
     }
 }
 `;
@@ -681,6 +741,8 @@ void main() {
 
         this.gl.enable(this.gl.BLEND);
         this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+
+        this.atlas.load(this.webGLProgram);
     }
 
     /**
@@ -690,9 +752,15 @@ void main() {
         const gl = this.gl;
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.offScreenBuffer);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, this.stencilClipBuffer);
+
+        gl.clearColor(0.0, 0.0, 0.0, 0.0);
+
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.GEQUAL);
+        gl.clearDepth(0.0);
 
         gl.enable(gl.STENCIL_TEST);
-        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, this.stencilClipBuffer);
 
         // this.fpTexture = this.fpTexture === this.colorTextureA ? this.colorTextureB : this.colorTextureA;
         // this.fpTextureClip = this.fpTextureClip === this.stencilTextureA ? this.stencilTextureB : this.stencilTextureA;
@@ -725,7 +793,10 @@ void main() {
             //}
 
             gl.drawBuffers(attachments);
-            gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+
+            this.atlas.bind(gl.TEXTURE0 + this._maxTextures, this._maxTextures);
 
             // First, clip polygons if any required
             if (renderInfo.polygons.length) {
@@ -800,7 +871,7 @@ void main() {
 
                         // Bind positions
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
-                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
 
                         // Bind per-vertex colors (normalized u8 → float 0..1)
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
@@ -819,7 +890,7 @@ void main() {
 
                         // Bind positions
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
-                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
 
                         // Bind per-vertex colors (normalized u8 → float 0..1)
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
@@ -838,7 +909,7 @@ void main() {
 
                         // Bind positions
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
-                        gl.vertexAttribPointer(this._positionsBuffer, 2, gl.FLOAT, false, 0, 0);
+                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
 
                         // Bind per-vertex colors (normalized u8 → float 0..1)
                         gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboCol);
@@ -848,14 +919,36 @@ void main() {
                         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
                         gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
                     }
+
+                    batch = vectorTile.icons;
+                    if (batch) {
+                        if (!vectorTile.fills && !vectorTile.lines && !vectorTile.points) {
+                            gl.uniformMatrix3fv(this._geomSingleMatrix, false, batch.matrix);
+                        }
+
+                        // Bind positions
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboPos);
+                        gl.vertexAttribPointer(this._positionsBuffer, 4, gl.FLOAT, false, 0, 0);
+
+                        // Bind per-vertex icon parameters
+                        gl.bindBuffer(gl.ARRAY_BUFFER, batch.vboParam);
+                        gl.vertexAttribPointer(this._colorAttrib, 4, gl.FLOAT, false, 0, 0);
+
+                        // Bind indices and draw one instance
+                        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, batch.ibo);
+                        gl.drawElementsInstanced(gl.TRIANGLES, batch.count, gl.UNSIGNED_INT, 0, 1);
+                    }
                 }
+
                 gl.uniform2f(this._renderClipping, 0, 0);
             }
 
             this._renderOffset++;
         }
 
+        gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.STENCIL_TEST);
+
         gl.bindVertexArray(null);
 
         if (!renderOutput) {
@@ -879,6 +972,7 @@ void main() {
         // this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
         const gl  = this.gl;
+
         if (this.stencilClipBuffer) {
             gl.deleteRenderbuffer(this.stencilClipBuffer);
         }
@@ -931,8 +1025,9 @@ void main() {
     }
 
     _createOffscreenTexture(name, width, height, layerCount, filter) {
-        layerCount = Math.max(layerCount, 1);
         const gl = this.gl;
+
+            layerCount = Math.max(layerCount, 1);
 
         let texRef = this[name];
         if (texRef) {
@@ -954,6 +1049,7 @@ $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.Textur
 
     constructor(gl, opts) {
         super(gl, opts);
+
         this.version = 1;
         this._atlasUploadedVersion = -1;
 
@@ -973,16 +1069,18 @@ $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.Textur
 
 
     /**
-     * Add an image. Returns a stable atlasId.
+     * Add an image. Returns a stable textureId.
      * @param {ImageBitmap|HTMLImageElement|HTMLCanvasElement|ImageData|Uint8Array} source
-     * @param {number} [w]
-     * @param {number} [h]
+     * @param {{
+     *   width?: number,
+     *   height?: number,
+     * }} [opts]
      * @returns {number}
      */
-    addImage(source, w, h) {
-        const width = (typeof w === 'number') ? w :
+    addImage(source, opts) {
+        const width = (opts && opts.width && typeof opts.width === 'number') ? opts.width :
             (source && (source.width || source.naturalWidth || (source.canvas && source.canvas.width) || source.w));
-        const height = (typeof h === 'number') ? h :
+        const height = (opts && opts.height && typeof opts.height === 'number') ? opts.height :
             (source && (source.height || source.naturalHeight || (source.canvas && source.canvas.height) || source.h));
 
         if (!width || !height) {
@@ -1033,7 +1131,7 @@ $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.Textur
      * Texture atlas works as a single texture unit. Bind the atlas before using it at desired texture unit.
      * @param textureUnit
      */
-    bind(textureUnit) {
+    bind(textureUnit, textureUnitIndex) {
         const gl = this.gl;
 
         // textureUnit is the numeric unit index (0..N-1)
@@ -1041,7 +1139,9 @@ $.FlexRenderer.WebGL20.TextureAtlas2DArray = class extends $.FlexRenderer.Textur
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.texture);
 
         // only push uniform arrays when changed (fast and harmless during draw)
+
         if (this._atlasUploadedVersion !== this.version) {
+            gl.uniform1i(this._atlasTexLoc, textureUnitIndex);
             gl.uniform2fv(this._atlasScaleLoc, this._scale);
             gl.uniform2fv(this._atlasOffsetLoc, this._offset);
             gl.uniform1iv(this._atlasLayerLoc, this._layer);
@@ -1063,9 +1163,21 @@ uniform vec2  u_atlasScale[${this.maxIds}];
 uniform vec2  u_atlasOffset[${this.maxIds}];
 uniform int   u_atlasLayer[${this.maxIds}];
 
-vec4 osd_atlas_texture(int atlasId, vec2 uv) {
-    vec2 st = uv * u_atlasScale[atlasId] + u_atlasOffset[atlasId];
-    float layer = float(u_atlasLayer[atlasId]);
+vec4 osd_atlas_texture(int textureId, vec2 uv) {
+    if (textureId < 0) {
+        // return purple for non-existent texture
+        return vec4(1.0, 0.0, 1.0, 1.0);
+    }
+
+    // enable mirroring
+    uv = mod(uv, 2.0);
+    uv = uv - 1.0;
+    uv = sign(uv) * uv;
+    uv = 1.0 - uv;
+
+    vec2 st = u_atlasOffset[textureId] + uv * u_atlasScale[textureId];
+    float layer = float(u_atlasLayer[textureId]);
+
     return texture(u_atlasTex, vec3(st, layer));
 }
 `;
@@ -1088,12 +1200,12 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         this._commitUploads();
 
         // (optional) you can also pre-upload the uniform arrays here once right after commit
-        if (this._atlasUploadedVersion !== this.version) {
-            gl.uniform2fv(this._atlasScaleLoc, this._scale);
-            gl.uniform2fv(this._atlasOffsetLoc, this._offset);
-            gl.uniform1iv(this._atlasLayerLoc, this._layer);
-            this._atlasUploadedVersion = this.version;
-        }
+        // if (this._atlasUploadedVersion !== this.version) {
+        //     gl.uniform2fv(this._atlasScaleLoc, this._scale);
+        //     gl.uniform2fv(this._atlasOffsetLoc, this._offset);
+        //     gl.uniform1iv(this._atlasLayerLoc, this._layer);
+        //     this._atlasUploadedVersion = this.version;
+        // }
     }
 
     /**
@@ -1177,9 +1289,12 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
     }
 
     _ensureCapacityFor(width, height) {
+        const paddedWidth = width + 2 * this.padding;
+        const paddedHeight = height + 2 * this.padding;
+
         // try current layers first
         for (let li = 0; li < this.layers; li++) {
-            const pos = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+            const pos = this._tryPlaceRect(li, paddedWidth, paddedHeight);
             if (pos) {
                 return { layer: li, x: pos.x, y: pos.y, willRealloc: false };
             }
@@ -1188,11 +1303,11 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
         // if rectangle is bigger than layer extent, grow extent (power of 2)
         let newW = this.layerWidth;
         let newH = this.layerHeight;
-        if (width + this.padding * 2 > newW || height + this.padding * 2 > newH) {
-            while (newW < width + this.padding * 2) {
+        if (paddedWidth > newW || paddedHeight > newH) {
+            while (newW < paddedWidth) {
                 newW *= 2;
             }
-            while (newH < height + this.padding * 2) {
+            while (newH < paddedHeight) {
                 newH *= 2;
             }
             // reallocate texture with same layer count but bigger extent
@@ -1201,7 +1316,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 
         // try again after extent growth
         for (let li = 0; li < this.layers; li++) {
-            const pos2 = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+            const pos2 = this._tryPlaceRect(li, paddedWidth, paddedHeight);
             if (pos2) {
                 return { layer: li, x: pos2.x, y: pos2.y, willRealloc: false };
             }
@@ -1213,7 +1328,7 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
 
         // after adding layers there will be empty layers to place into
         const li = this._firstEmptyLayer();
-        const pos3 = this._tryPlaceRect(li, width + this.padding * 2, height + this.padding * 2);
+        const pos3 = this._tryPlaceRect(li, paddedWidth, paddedHeight);
         return { layer: li, x: pos3.x, y: pos3.y, willRealloc: false };
     }
 
@@ -1280,7 +1395,6 @@ vec4 osd_atlas_texture(int atlasId, vec2 uv) {
                 shelf.x += w;
                 return { x: x, y: y };
             }
-
         }
 
         // start a new shelf

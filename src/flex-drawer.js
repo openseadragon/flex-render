@@ -458,10 +458,9 @@
          * @param {OpenSeadragon.Mat3} viewMatrix
          */
         _drawTwoPassFirst(tiledImages, viewport, viewMatrix) {
-            const gl = this._gl;
-
             // FIRST PASS (render things as they are into the corresponding off-screen textures)
             const TI_PAYLOAD = [];
+
             for (let tiledImageIndex = 0; tiledImageIndex < tiledImages.length; tiledImageIndex++) {
                 const tiledImage = tiledImages[tiledImageIndex];
                 const payload = [];
@@ -469,12 +468,29 @@
 
                 const tilesToDraw = tiledImage.getTilesToDraw();
 
+                // rendering in 4 overlapping groups of non-overlapping tiles so the depth value stays relatively small
+                tilesToDraw.sort(
+                    (entryA, entryB) => {
+                        let levelA = entryA.tile.level;
+                        let levelOrderA = 2 * (entryA.tile.y % 2) + (entryA.tile.x % 2);
+
+                        let levelB = entryB.tile.level;
+                        let levelOrderB = 2 * (entryB.tile.y % 2) + (entryB.tile.x % 2);
+
+                        if (levelA === levelB) {
+                            return levelOrderB - levelOrderA;
+                        }
+
+                        return levelB - levelA;
+                    }
+                );
+
                 let overallMatrix = viewMatrix;
                 let imageRotation = tiledImage.getRotation(true);
                 // if needed, handle the tiledImage being rotated
 
                 // todo consider in-place multiplication, this creates insane amout of arrays
-                if( imageRotation % 360 !== 0) {
+                if (imageRotation % 360 !== 0) {
                     let imageRotationMatrix = $.Mat3.makeRotation(-imageRotation * Math.PI / 180);
                     let imageCenter = tiledImage.getBoundsNoRotate(true).getCenter();
                     let t1 = $.Mat3.makeTranslation(imageCenter.x, imageCenter.y);
@@ -499,7 +515,9 @@
                             //TODO consider drawing some error if the tile is in erroneous state
                             continue;
                         }
+
                         const transformMatrix = this._updateTileMatrix(tileInfo, tile, tiledImage, overallMatrix);
+
                         if (tileInfo.texture) {
                             payload.push({
                                 transformMatrix,
@@ -520,6 +538,10 @@
                             if (tileInfo.vectors.points) {
                                 tileInfo.vectors.points.matrix = transformMatrix;
                             }
+                            if (tileInfo.vectors.icons) {
+                                tileInfo.vectors.icons.matrix = transformMatrix;
+                            }
+
                             vecPayload.push(tileInfo.vectors);
                         }
                     }
@@ -536,6 +558,7 @@
                 } else {
                     polygons = [];
                 }
+
                 if (tiledImage._clip) {
                     const polygon = [
                         {x: tiledImage._clip.x, y: tiledImage._clip.y},
@@ -560,7 +583,8 @@
 
             // todo flatten render data
 
-            this.renderer.gl.clear(gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
+            this.renderer.gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            this.renderer.gl.clear(this.renderer.gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
 
             this.renderer.firstPassProcessData(TI_PAYLOAD);
             return true;
@@ -790,21 +814,23 @@
                     let vCount = 0,
                         iCount = 0;
                     for (const m of meshes) {
-                        vCount += (m.vertices.length / 2);
+                        vCount += (m.vertices.length / 4);
                         iCount += m.indices.length;
                     }
 
                     // Allocate batched arrays
-                    const positions = new Float32Array(vCount * 2);
+                    const positions = new Float32Array(vCount * 4);
                     const colors    = new Uint8Array(vCount * 4);  // normalized RGBA
+                    const parameters = new Float32Array(vCount * 4);
                     const indices   = new Uint32Array(iCount);
 
                     // Fill them
                     let vOfs = 0,
                         iOfs = 0,
                         baseVertex = 0;
+
                     for (const m of meshes) {
-                        positions.set(m.vertices, vOfs * 2);
+                        positions.set(m.vertices, vOfs * 4);
 
                         // fill color per-vertex (constant per feature)
                         const rgba = m.color ? m.color : [0, 0, 0, 1];
@@ -812,7 +838,7 @@
                         const g = Math.max(0, Math.min(255, Math.round(rgba[1] * 255)));
                         const b = Math.max(0, Math.min(255, Math.round(rgba[2] * 255)));
                         const a = Math.max(0, Math.min(255, Math.round(rgba[3] * 255)));
-                        for (let k = 0; k < (m.vertices.length / 2); k++) {
+                        for (let k = 0; k < (m.vertices.length / 4); k++) {
                             const cOfs = (vOfs + k) * 4;
                             colors[cOfs + 0] = r;
                             colors[cOfs + 1] = g;
@@ -820,14 +846,18 @@
                             colors[cOfs + 3] = a;
                         }
 
+                        if (m.parameters) {
+                            parameters.set(m.parameters, vOfs * 4);
+                        }
+
                         // rebase indices
                         for (let k = 0; k < m.indices.length; k++) {
                             indices[iOfs + k] = baseVertex + m.indices[k];
                         }
 
-                        vOfs += (m.vertices.length / 2);
+                        vOfs += (m.vertices.length / 4);
                         iOfs += m.indices.length;
-                        baseVertex += (m.vertices.length / 2);
+                        baseVertex += (m.vertices.length / 4);
                     }
 
                     // Upload once
@@ -839,11 +869,15 @@
                     gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
                     gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
 
+                    const vboParam = gl.createBuffer();
+                    gl.bindBuffer(gl.ARRAY_BUFFER, vboParam);
+                    gl.bufferData(gl.ARRAY_BUFFER, parameters, gl.STATIC_DRAW);
+
                     const ibo = gl.createBuffer();
                     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
                     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
-                    return { vboPos, vboCol, ibo, count: indices.length };
+                    return { vboPos, vboCol, vboParam, ibo, count: indices.length };
                 };
 
                 if (data.fills && data.fills.length) {
@@ -854,6 +888,9 @@
                 }
                 if (data.points && data.points.length) {
                     tileInfo.vectors.points = buildBatch(data.points);
+                }
+                if (data.icons && data.icons.length) {
+                    tileInfo.vectors.icons = buildBatch(data.icons);
                 }
 
                 return Promise.resolve(tileInfo);
@@ -1008,6 +1045,11 @@
                     gl.deleteBuffer(data.vectors.points.vboPos);
                     gl.deleteBuffer(data.vectors.points.vboCol);
                     gl.deleteBuffer(data.vectors.points.ibo);
+                }
+                if (data.vectors.icons) {
+                    gl.deleteBuffer(data.vectors.icons.vboPos);
+                    gl.deleteBuffer(data.vectors.icons.vboCol);
+                    gl.deleteBuffer(data.vectors.icons.ibo);
                 }
                 data.vectors = null;
             }
