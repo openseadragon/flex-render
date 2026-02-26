@@ -151,12 +151,19 @@
          * @param {Number} width
          * @param {Number} height
          * @param {Number} levels number of layers that are rendered, kind of 'depth' parameter, an integer
-         *
+         * @param {Number} tiledImageCount number of tiled images carrying the levels
          * @instance
          * @memberof FlexRenderer
          */
-        setDimensions(x, y, width, height, levels) {
+        setDimensions(x, y, width, height, levels, tiledImageCount) {
             //no-op
+        }
+
+        /**
+         * Set viewer background color, supports #RGBA syntax
+         * @param (background)
+         */
+        setBackground(background) {
         }
 
         destroy() {
@@ -290,7 +297,7 @@
         }
 
 // TODO we might want to fire only for active program and do others when really encesarry or with some delay, best at some common implementation level
-        setDimensions(x, y, width, height, levels) {
+        setDimensions(x, y, width, height, levels, tiledImageCount) {
 
         }
 

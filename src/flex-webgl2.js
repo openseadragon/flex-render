@@ -42,7 +42,6 @@
 
         this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
 
-        //todo consider passing reference to this
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, this.firstAtlas), "firstPass");
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, this.secondAtlas), "secondPass");
     }
@@ -56,7 +55,8 @@
      * @returns {string} glsl code for texture sampling
      */
     sampleTexture(index, vec2coords) {
-        return `osd_texture(${index}, ${vec2coords})`;
+        // todo make pack index configurable and use this instead of hardcoding functions inside shaderlayer sampleChannel(...)
+        return `osd_texture(${index}, 0, ${vec2coords})`;
     }
 
     sampleTextureAtlas(textureId, vec2coords) {
@@ -67,10 +67,31 @@
         return `osd_texture_size(${index})`;
     }
 
-    setDimensions(x, y, width, height, levels) {
-        this.renderer.getProgram(this.firstPassProgramKey).setDimensions(x, y, width, height, levels);
-        this.renderer.getProgram(this.secondPassProgramKey).setDimensions(x, y, width, height, levels);
+    setDimensions(x, y, width, height, levels, tiledImageCount) {
+        this.renderer.getProgram(this.firstPassProgramKey).setDimensions(x, y, width, height, levels, tiledImageCount);
+        this.renderer.getProgram(this.secondPassProgramKey).setDimensions(x, y, width, height, levels, tiledImageCount);
         //todo consider some elimination of too many calls
+    }
+
+    setBackground(background) {
+        // todo this is not very nice, we need to call setBg before programs are compiled in a generic way, so
+        //  we hit a case where first program is compiled and this setter called, while second program is not available
+        const program = this.renderer.getProgram(this.secondPassProgramKey);
+        if (!program) {
+            return;
+        }
+        let hex = background.replace(/^#/, "").trim();
+        if (hex.length === 6) {
+            hex += "FF";
+        }
+        if (hex.length !== 8) {
+            throw new Error("Hex must be RRGGBB or RRGGBBAA");
+        }
+        const r = parseInt(hex.slice(0, 2), 16) / 255;
+        const g = parseInt(hex.slice(2, 4), 16) / 255;
+        const b = parseInt(hex.slice(4, 6), 16) / 255;
+        const a = parseInt(hex.slice(6, 8), 16) / 255;
+        this.renderer.getProgram(this.secondPassProgramKey)._bgColor = `vec4(${r.toFixed(6)}, ${g.toFixed(6)}, ${b.toFixed(6)}, ${a.toFixed(6)})`;
     }
 
     destroy() {
@@ -192,6 +213,7 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
         this._maxTextures = Math.min(gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS), 32) - 1; // subtracting 1 to allow texture atlas to be bound; TODO: only bind texture atlas when it is needed
         //todo this might be limiting in some wild cases... make it configurable..? or consider 1d texture
         this.textureMappingsUniformSize = 64;
+        this._bgColor = 'vec4(.0)';
     }
 
     build(shaderMap, keyOrder) {
@@ -203,9 +225,13 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
             return;
         }
 
+        // todo consider clip test before setting intermediate color -> but we would have to test all clips, not just one
+        //   no clip: whole viewport has the color
+        //   clip: only rendered parts have the background color (likely more desirable)
         let definition = '',
             execution = `
-vec4 intermediate_color = vec4(.0);
+vec4 intermediate_color = ${this._bgColor};
+overall_color = intermediate_color;
 vec4 clip_color = vec4(.0);
 `,
             customBlendFunctions = '';
@@ -316,6 +342,7 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
         this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
         this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
 
+        this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
         this.vao = gl.createVertexArray();
     }
 
@@ -329,6 +356,25 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
             renderInfo.shader.glLoaded(this.webGLProgram, gl);
         }
         this.atlas.load(this.webGLProgram);
+
+        const renderer = this.context;
+        const packInfo = renderer.__flexPackInfo || {};
+        const layout = packInfo.layout || {};
+        const baseLayer = layout.baseLayer || [];
+        const packCount = layout.packCount || [];
+        const channelCount = packInfo.channelCount || [];
+
+        const maxTI = this._dataLayerCount;
+        const tiInfo = new Int32Array(maxTI * 3);
+        for (let i = 0; i < maxTI; i++) {
+            const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i; // fallback
+            const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
+            tiInfo[i * 3] = base;
+            tiInfo[i * 3 + 1] = pc;
+            tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
+        }
+
+        this.gl.uniform3iv(this._tiInfoLoc, tiInfo);
     }
 
     /**
@@ -352,8 +398,10 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
             instanceTextureIndexes.push(...renderInfo.shader.getConfig().tiledImages);
         }
 
+        // todo _instanceOffsets and _instanceTextureIndexes are possibly static per program lifetime, so we could do this once at load()
         gl.uniform1iv(this._instanceOffsets, instanceOffsets);
         gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
+        // todo changes dynamically, but could be stored per tiled image instead of per-shader layer
         gl.uniform3fv(this._shaderVariables, shaderVariables);
 
         gl.activeTexture(gl.TEXTURE0);
@@ -380,7 +428,9 @@ intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermedi
     }
 
     // TODO we might want to fire only for active program and do others when really encesarry or with some delay, best at some common implementation level
-    setDimensions(x, y, width, height, levels) {
+    setDimensions(x, y, width, height, levels, tiledImageCount) {
+        this._dataLayerCount = levels;
+        this._tiledImageCount = tiledImageCount;
     }
 
     // PRIVATE FUNCTIONS
@@ -424,9 +474,14 @@ precision mediump int;
 precision mediump float;
 precision mediump sampler2DArray;
 
-uniform int u_instanceTextureIndexes[${this.textureMappingsUniformSize}];
+// Stores shader index -> pointer to u_instanceTextureIndexes
 uniform int u_instanceOffsets[${this.textureMappingsUniformSize}];
+// Stores texture indexes for each shader, beginning at index obtained from u_instanceOffsets
+uniform int u_instanceTextureIndexes[${this.textureMappingsUniformSize}];
+// Carries shader global attributes (opacity, pixelSize, zoom)
 uniform vec3 u_shaderVariables[${this.textureMappingsUniformSize}];
+// For each tiled image, we store (base texture offset, pack count, channel count)
+uniform ivec3 u_tiInfo[${this.textureMappingsUniformSize}];
 
 in vec2 v_texture_coords;
 
@@ -439,22 +494,50 @@ float zoom;
 uniform sampler2DArray u_inputTextures;
 uniform sampler2DArray u_stencilTextures;
 
-vec4 osd_texture(int index, vec2 coords) {
+int osd_pack_count(int sourceIndex) {
     int offset = u_instanceOffsets[instance_id];
-    index = u_instanceTextureIndexes[offset + index];
-    return texture(u_inputTextures, vec3(coords, float(index)));
+    int worldIndex = u_instanceTextureIndexes[offset + sourceIndex];
+    return u_tiInfo[worldIndex].y;
 }
 
-vec4 osd_stencil_texture(int instance, int index, vec2 coords) {
+int osd_channel_count(int sourceIndex) {
+    int offset = u_instanceOffsets[instance_id];
+    int worldIndex = u_instanceTextureIndexes[offset + sourceIndex];
+    ivec3 info = u_tiInfo[worldIndex];
+    if (info.z <= 0) {
+        return info.y * 4;
+    }
+    return info.z;
+}
+
+vec4 osd_texture(int sourceIndex, int packIndex, vec2 coords) {
+    int offset = u_instanceOffsets[instance_id];
+    int worldIndex = u_instanceTextureIndexes[offset + sourceIndex];
+    int base = u_tiInfo[worldIndex].x;
+    int pc = u_tiInfo[worldIndex].y;
+    packIndex = clamp(packIndex, 0, pc - 1);
+    return texture(u_inputTextures, vec3(coords, float(base + packIndex)));
+}
+
+float osd_channel(int sourceIndex, int channelIndex, vec2 coords) {
+    int pack = channelIndex >> 2;
+    int comp = channelIndex & 3;
+    vec4 v = osd_texture(sourceIndex, pack, coords);
+         if (comp == 0) return v.r;
+    else if (comp == 1) return v.g;
+    else if (comp == 2) return v.b;
+    else                return v.a;
+}
+
+vec4 osd_stencil_texture(int instance, int sourceIndex, vec2 coords) {
     int offset = u_instanceOffsets[instance];
-    index = u_instanceTextureIndexes[offset + index];
+    int index = u_instanceTextureIndexes[offset + sourceIndex];
     return texture(u_stencilTextures, vec3(coords, float(index)));
 }
 
-ivec2 osd_texture_size(int index) {
-    int offset = u_instanceOffsets[instance_id];
-    index = u_instanceTextureIndexes[offset + index];
-    return textureSize(u_inputTextures, index).xy;
+// todo index unused, but we might want to keep it (other rendering engines might need it on the API level, not necessarily here in GLSL)
+ivec2 osd_texture_size(int sourceIndex) {
+    return textureSize(u_inputTextures, 0).xy;
 }
 
 ${this.atlas.getFragmentShaderDefinition()}
@@ -571,7 +654,8 @@ in float v_vecDepth;
 flat in int v_textureId;
 in vec4 v_vecColor;
 
-uniform sampler2D u_textures[${this._maxTextures}];
+uniform sampler2DArray u_textures[${this._maxTextures}];
+uniform int u_tileLayer;
 
 ${this.atlas.getFragmentShaderDefinition()}
 
@@ -580,12 +664,11 @@ layout(location=1) out vec4 outputStencil;
 
 void main() {
     if (u_renderClippingParams.x < 0.5) {
-        // Iterate over tiles - textures for each tile (a texture array)
         for (int i = 0; i < ${this._maxTextures}; i++) {
-            // Iterate over data in each tile if the index matches our tile
             if (i == instance_id) {
                  switch (i) {
-    ${this.printN(x => `case ${x}: outputColor = texture(u_textures[${x}], v_texture_coords); break;`,
+    ${ this.printN(x =>
+                    `case ${x}: outputColor = texture(u_textures[${x}], vec3(v_texture_coords, float(u_tileLayer))); break;`,
                 this._maxTextures, "                ")}
                  }
                  break;
@@ -648,6 +731,7 @@ void main() {
         // Texture locations are 0->N uniform indexes, we do not load the data here yet as vao does not store them
         this._inputTexturesLoc = gl.getUniformLocation(program, "u_textures");
         this._renderClipping = gl.getUniformLocation(program, "u_renderClippingParams");
+        this._tileLayerLoc = gl.getUniformLocation(program, "u_tileLayer");
 
         // Alias names to avoid confusion
         this._positionsBuffer = gl.getAttribLocation(program, "a_payload0");
@@ -762,12 +846,12 @@ void main() {
 
         gl.enable(gl.STENCIL_TEST);
 
+        let isBlend = true;
+
         // this.fpTexture = this.fpTexture === this.colorTextureA ? this.colorTextureB : this.colorTextureA;
         // this.fpTextureClip = this.fpTextureClip === this.stencilTextureA ? this.stencilTextureB : this.stencilTextureA;
         this.fpTexture = this.colorTextureA;
         this.fpTextureClip = this.stencilTextureA;
-
-        this._renderOffset = 0;
 
         // Allocate reusable buffers once
         if (!this._tempMatrixData) {
@@ -782,17 +866,27 @@ void main() {
 
             const attachments = [];
 
-            // for (let i = 0; i < 1; i++) {
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
-                    this.fpTexture, 0, this._renderOffset);
-                attachments.push(gl.COLOR_ATTACHMENT0);
+            const targetColorLayer   = renderInfo.dataIndex;
+            const targetStencilLayer = renderInfo.stencilIndex;
 
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + 1,
-                    this.fpTextureClip, 0, this._renderOffset);
-                attachments.push(gl.COLOR_ATTACHMENT0 + 1);
+            // for (let i = 0; i < 1; i++) {
+
+            // color
+            gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+                this.colorTextureA, 0, targetColorLayer);
+            attachments.push(gl.COLOR_ATTACHMENT0);
+
+            // stencil
+            gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1,
+                this.stencilTextureA, 0, targetStencilLayer);
+            attachments.push(gl.COLOR_ATTACHMENT0 + 1);
+
             //}
 
             gl.drawBuffers(attachments);
+
+            const packIndex = (typeof renderInfo.packIndex === "number") ? renderInfo.packIndex : 0;
+            gl.uniform1i(this._tileLayerLoc, packIndex);
 
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
 
@@ -830,6 +924,12 @@ void main() {
 
             const tileCount = rasterTiles.length;
             if (tileCount) {
+                // Tiles MUST NOT blend - alpha channel can carry data just like another channel payload
+                if (isBlend) {
+                    gl.disable(gl.BLEND);
+                    isBlend = false;
+                }
+                isBlend = false;
                 // Then draw join tiles
                 gl.bindVertexArray(this.firstPassVao);
                 let currentIndex = 0;
@@ -840,7 +940,7 @@ void main() {
                         const tile = rasterTiles[currentIndex + i];
 
                         gl.activeTexture(gl.TEXTURE0 + i);
-                        gl.bindTexture(gl.TEXTURE_2D, tile.texture);
+                        gl.bindTexture(gl.TEXTURE_2D_ARRAY, tile.texture);
 
                         this._tempMatrixData.set(tile.transformMatrix, i * 9);
                         this._tempTexCoords.set(tile.position, i * 8);
@@ -859,6 +959,11 @@ void main() {
 
             const vectors = renderInfo.vectors;
             if (vectors && vectors.length) {
+                // Vectors MUST blend, as they can overlap within single layer
+                if (!isBlend) {
+                    gl.enable(gl.BLEND);
+                    isBlend = true;
+                }
                 // Signal geometry branch in shader
                 gl.uniform2f(this._renderClipping, 1, 1);
                 gl.bindVertexArray(this.firstPassVaoGeom);
@@ -942,12 +1047,15 @@ void main() {
 
                 gl.uniform2f(this._renderClipping, 0, 0);
             }
-
-            this._renderOffset++;
         }
 
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.STENCIL_TEST);
+
+        // blending by default ON
+        if (!isBlend) {
+            gl.enable(gl.BLEND);
+        }
 
         gl.bindVertexArray(null);
 
@@ -956,6 +1064,8 @@ void main() {
         }
         renderOutput.texture = this.fpTexture;
         renderOutput.stencil = this.fpTextureClip;
+        renderOutput.textureDepth = this._dataLayerCount;
+        renderOutput.stencilDepth = this._tiledImageCount;
 
         return renderOutput;
     }
@@ -963,13 +1073,16 @@ void main() {
     unload() {
     }
 
-    setDimensions(x, y, width, height, dataLayerCount) {
+    setDimensions(x, y, width, height, dataLayerCount, tiledImageCount) {
         // Double swapping required else collisions
         this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR);
         // this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);
 
-        this._createOffscreenTexture("stencilTextureA", width, height, dataLayerCount, this.gl.LINEAR);
+        this._createOffscreenTexture("stencilTextureA", width, height, tiledImageCount, this.gl.LINEAR);
         // this._createOffscreenTexture("stencilTextureB", width, height, dataLayerCount, this.gl.LINEAR);
+
+        this._dataLayerCount = dataLayerCount;
+        this._tiledImageCount = tiledImageCount;
 
         const gl  = this.gl;
 
