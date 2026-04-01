@@ -303,7 +303,7 @@
                 webglProgram, this.gl, program, $.console.error, this.debug
             )) {
                 this.gl.useProgram(webglProgram);
-                program.created(webglProgram, this.canvas.width, this.canvas.height);
+                program.created(this.canvas.width, this.canvas.height);
                 return key;
             }
             // else todo consider some cleanup

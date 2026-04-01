@@ -48,6 +48,7 @@
                     eval(scriptContent);
                 } catch (error) {
                     alert("Error executing script: " + (error.message || error));
+                    console.error("Error executing script:", error);
                 }
             }
         </script>
