@@ -36,6 +36,8 @@ module.exports = function(grunt) {
             "src/flex-webgl2.js",
             "src/flex-drawer.js",
             "src/flex-standalone.js",
+            "src/flex-layers/adaptive-threshold.js",
+            "src/flex-layers/binary-mask.js",
             "src/flex-layers/bipolar-heatmap.js",
             "src/flex-layers/colormap.js",
             "src/flex-layers/default.js",
@@ -43,10 +45,12 @@ module.exports = function(grunt) {
             "src/flex-layers/heatmap.js",
             "src/flex-layers/sobel.js",
             "src/flex-layers/texture.js",
+            "src/flex-layers/threshold.js",
             "src/flex-layers/time-series.js",
             "src/flex-layers/channel.js",
             "src/mvt-tile-source.js",
             "src/fabric-tile-source.js",
+            "src/configurator.js"
         ],
         mvtWorkerDeps = [
             "src/vendor/pbf.min.js",
