@@ -1077,7 +1077,6 @@
                 }
 
                 const positions = new Float32Array(vCount * 4);
-                const colors = new Uint8Array(vCount * 4);
                 const parameters = new Float32Array(vCount * 4);
                 const indices = new Uint32Array(iCount);
 
@@ -1088,24 +1087,26 @@
                 for (const m of meshes) {
                     positions.set(m.vertices, vOfs * 4);
 
+                    // fill color per-vertex (constant per feature)
                     const rgba = m.color ? m.color : [0, 0, 0, 1];
-                    const r = Math.max(0, Math.min(255, Math.round(rgba[0] * 255)));
-                    const g = Math.max(0, Math.min(255, Math.round(rgba[1] * 255)));
-                    const b = Math.max(0, Math.min(255, Math.round(rgba[2] * 255)));
-                    const a = Math.max(0, Math.min(255, Math.round(rgba[3] * 255)));
-
+                    const r = Math.max(0.0, Math.min(1.0, rgba[0]));
+                    const g = Math.max(0.0, Math.min(1.0, rgba[1]));
+                    const b = Math.max(0.0, Math.min(1.0, rgba[2]));
+                    const a = Math.max(0.0, Math.min(1.0, rgba[3]));
                     for (let k = 0; k < (m.vertices.length / 4); k++) {
-                        const cOfs = (vOfs + k) * 4;
-                        colors[cOfs + 0] = r;
-                        colors[cOfs + 1] = g;
-                        colors[cOfs + 2] = b;
-                        colors[cOfs + 3] = a;
+                        const pOfs = (vOfs + k) * 4;
+                        parameters[pOfs + 0] = r;
+                        parameters[pOfs + 1] = g;
+                        parameters[pOfs + 2] = b;
+                        parameters[pOfs + 3] = a;
                     }
 
+                    // if parameters are specified from mesh
                     if (m.parameters) {
                         parameters.set(m.parameters, vOfs * 4);
                     }
 
+                    // rebase indices
                     for (let k = 0; k < m.indices.length; k++) {
                         indices[iOfs + k] = baseVertex + m.indices[k];
                     }
@@ -1115,13 +1116,10 @@
                     baseVertex += (m.vertices.length / 4);
                 }
 
+                // Upload once
                 const vboPos = gl.createBuffer();
                 gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
                 gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-
-                const vboCol = gl.createBuffer();
-                gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
-                gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
 
                 const vboParam = gl.createBuffer();
                 gl.bindBuffer(gl.ARRAY_BUFFER, vboParam);
@@ -1131,7 +1129,7 @@
                 gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
                 gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
-                return { vboPos, vboCol, vboParam, ibo, count: indices.length };
+                return { vboPos, vboParam, ibo, count: indices.length };
             };
 
             if (data.fills && data.fills.length) {
