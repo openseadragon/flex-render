@@ -294,6 +294,62 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
         },
         glType: "bool",
         uiType: "bool"
+    },
+
+    select: {
+        defaults: function() {
+            return {
+                title: "Select",
+                interactive: true,
+                default: 1,
+                // [{ value: 0, label: "Binary" }, ...] or {0:"Binary",1:"Binary inv"}
+                options: [{ value: 0, label: "Off" }, { value: 1, label: "On" }]
+            };
+        },
+        html: function(uniqueId, params, classes = "", css = "") {
+            const title = params.title ? `<span>${params.title}</span>` : "";
+
+            let options = [];
+            if (Array.isArray(params.options)) {
+                options = params.options.map(opt => {
+                    if (typeof opt === "object") {
+                        return {
+                            value: Number.parseInt(opt.value, 10),
+                            label: opt.label || String(opt.value)
+                        };
+                    }
+                    const v = Number.parseInt(opt, 10);
+                    return { value: v, label: String(opt) };
+                });
+            } else if (params.options && typeof params.options === "object") {
+                options = Object.entries(params.options).map(([value, label]) => ({
+                    value: Number.parseInt(value, 10),
+                    label: String(label)
+                }));
+            }
+
+            const optionHtml = options.map(opt => {
+                const selected = Number.parseInt(params.default, 10) === opt.value ? " selected" : "";
+                return `<option value="${opt.value}"${selected}>${opt.label}</option>`;
+            }).join("");
+
+            return `${title} <select id="${uniqueId}" class="${classes}" style="${css}">${optionHtml}</select>`;
+        },
+        glUniformFunName: function() {
+            return "uniform1i";
+        },
+        decode: function(fromValue) {
+            const parsed = Number.parseInt(fromValue, 10);
+            return Number.isNaN(parsed) ? 0 : parsed;
+        },
+        normalize: function(value, params) {
+            return value;
+        },
+        sample: function(name, ratio) {
+            return name;
+        },
+        glType: "int",
+        uiType: "select_int"
     }
 };
 
@@ -619,14 +675,14 @@ $.FlexRenderer.UIControls.IControl = class {
      * Load a value from cache to support its caching - should be used on all values
      * that are available for the user to play around with and change using UI controls
      *
-     * @param defaultValue value to return in case of no cached value
+     * @param defaultValue value to return in case of no cached value, if undefined, it is fetched from supports()
      * @param paramName name of the parameter, must be equal to the name from 'supports' definition
-     *  - default value can be empty string
      * @return {*} cached or default value
      */
     load(defaultValue, paramName = "") {
-        const value = this.owner.loadProperty(this.name + (paramName === "default" ? "" : paramName), defaultValue);
-        return value;
+        return this.owner.loadProperty(this.name + (paramName === "default" ? "" : paramName),
+            defaultValue === undefined ? this.supports[paramName] : defaultValue,
+        );
     }
 
     /**

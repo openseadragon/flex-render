@@ -34,7 +34,7 @@
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
             // We have 'undefined' extra format for blank tiles
-            this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "undefined"];
+            this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "gpuTextureSet", "undefined"];
             this.rebuildCounter = 0;
 
             // reject listening for the tile-drawing and tile-drawn events, which this drawer does not fire
@@ -79,7 +79,9 @@
                 usePrivateCache: true,
                 preloadCache: true,
                 copyShaderConfig: false,
-                handleNavigator: true
+                handleNavigator: true,
+                // hex bg color, by default transparent
+                backgroundColor: undefined
             };
         }
 
@@ -329,6 +331,46 @@
             this._destroyed = true;
         }
 
+        // todo documment
+        getPackCount(ti) {
+            const world = this.viewer.world;
+            if (!world) {
+                return 1;
+            }
+
+            let tiledImage = ti;
+            if (typeof ti === "number") {
+                tiledImage = world.getItemAt(ti);
+            }
+            if (!tiledImage) {
+                return 1;
+            }
+
+            return tiledImage.__flexPackCount || 1;
+        }
+
+        getChannelCount(ti) {
+            const world = this.viewer.world;
+            if (!world) {
+                return 4;
+            }
+
+            let tiledImage = ti;
+            if (typeof ti === "number") {
+                tiledImage = world.getItemAt(ti);
+            }
+            if (!tiledImage) {
+                return 4;
+            }
+
+            // fall back to packCount * 4, preserving old semantics
+            if (typeof tiledImage.__flexChannelCount === "number") {
+                return tiledImage.__flexChannelCount;
+            }
+            const pc = tiledImage.__flexPackCount || 1;
+            return pc * 4;
+        }
+
         _hasInvalidBuildState() {
             return this._requestBuildStamp > this._buildStamp;
         }
@@ -344,8 +386,9 @@
 
             if (timeout === 0) {
                 this._buildStamp = Date.now();
-                this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this.viewer.world.getItemCount());
+                this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
                 // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
+                this._updatePackLayout();
                 this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
                 this.rebuildCounter++;
                 return $.Promise.resolve();
@@ -358,8 +401,9 @@
                             item.__shaderConfig.id));
                     }
                     this._buildStamp = Date.now();
-                    this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this.viewer.world.getItemCount());
+                    this.renderer.setDimensions(0, 0, this.canvas.width, this.canvas.height, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
                     // this.renderer.registerProgram(null, this.renderer.webglContext.firstPassProgramKey);
+                    this._updatePackLayout();
                     this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
                     this.rebuildCounter++;
                     this._rebuildHandle = null;
@@ -406,7 +450,8 @@
                 // this._renderingCanvas.width = this._outputCanvas.width;
                 // this._renderingCanvas.height = this._outputCanvas.height;
 
-                this.renderer.setDimensions(0, 0, viewportSize.x, viewportSize.y, this.viewer.world.getItemCount());
+                //todo batched?
+                this.renderer.setDimensions(0, 0, viewportSize.x, viewportSize.y, this._computeOffscreenLayerCount(), this.viewer.world.getItemCount());
                 this._size = viewportSize;
             };
             this.viewer.addHandler("resize", this._resizeHandler);
@@ -445,6 +490,8 @@
             let rotMatrix = $.Mat3.makeRotation(-view.rotation);
             let viewMatrix = scaleMatrix.multiply(rotMatrix).multiply(posMatrix);
 
+            this._ensurePackLayout();
+
             if (this._drawTwoPassFirst(tiledImages, view, viewMatrix)) {
                 this._drawTwoPassSecond(view);
             }
@@ -458,10 +505,9 @@
          * @param {OpenSeadragon.Mat3} viewMatrix
          */
         _drawTwoPassFirst(tiledImages, viewport, viewMatrix) {
-            const gl = this._gl;
-
             // FIRST PASS (render things as they are into the corresponding off-screen textures)
             const TI_PAYLOAD = [];
+
             for (let tiledImageIndex = 0; tiledImageIndex < tiledImages.length; tiledImageIndex++) {
                 const tiledImage = tiledImages[tiledImageIndex];
                 const payload = [];
@@ -469,12 +515,30 @@
 
                 const tilesToDraw = tiledImage.getTilesToDraw();
 
+                // rendering in 4 overlapping groups of non-overlapping tiles so the depth value stays relatively small
+                // TODO: move the tile ordering elsewhere to reduce amount of time spent recomputing it - possibly to TiledImage
+                tilesToDraw.sort(
+                    (entryA, entryB) => {
+                        let levelA = entryA.tile.level;
+                        let levelOrderA = 2 * (entryA.tile.y % 2) + (entryA.tile.x % 2);
+
+                        let levelB = entryB.tile.level;
+                        let levelOrderB = 2 * (entryB.tile.y % 2) + (entryB.tile.x % 2);
+
+                        if (levelA === levelB) {
+                            return levelOrderB - levelOrderA;
+                        }
+
+                        return levelB - levelA;
+                    }
+                );
+
                 let overallMatrix = viewMatrix;
                 let imageRotation = tiledImage.getRotation(true);
                 // if needed, handle the tiledImage being rotated
 
                 // todo consider in-place multiplication, this creates insane amout of arrays
-                if( imageRotation % 360 !== 0) {
+                if (imageRotation % 360 !== 0) {
                     let imageRotationMatrix = $.Mat3.makeRotation(-imageRotation * Math.PI / 180);
                     let imageCenter = tiledImage.getBoundsNoRotate(true).getCenter();
                     let t1 = $.Mat3.makeTranslation(imageCenter.x, imageCenter.y);
@@ -499,11 +563,14 @@
                             //TODO consider drawing some error if the tile is in erroneous state
                             continue;
                         }
+
                         const transformMatrix = this._updateTileMatrix(tileInfo, tile, tiledImage, overallMatrix);
+
                         if (tileInfo.texture) {
                             payload.push({
                                 transformMatrix,
-                                dataIndex: tiledImageIndex,
+                                dataIndex: tiledImage.__flexBaseLayer || tiledImageIndex, // color layer index
+                                stencilIndex: tiledImageIndex,
                                 texture: tileInfo.texture,
                                 position: tileInfo.position,
                                 tile: tile
@@ -520,6 +587,10 @@
                             if (tileInfo.vectors.points) {
                                 tileInfo.vectors.points.matrix = transformMatrix;
                             }
+                            if (tileInfo.vectors.icons) {
+                                tileInfo.vectors.icons.matrix = transformMatrix;
+                            }
+
                             vecPayload.push(tileInfo.vectors);
                         }
                     }
@@ -536,6 +607,7 @@
                 } else {
                     polygons = [];
                 }
+
                 if (tiledImage._clip) {
                     const polygon = [
                         {x: tiledImage._clip.x, y: tiledImage._clip.y},
@@ -549,18 +621,26 @@
                     }));
                 }
 
-                TI_PAYLOAD.push({
-                    tiles: payload,
-                    vectors: vecPayload,
-                    polygons: polygons,
-                    dataIndex: tiledImageIndex,
-                    _temp: overallMatrix, // todo dirty
-                });
+                const packCount = tiledImage.__flexPackCount || 1;
+                const baseLayer = (tiledImage.__flexBaseLayer || 0);
+
+                for (let packIndex = 0; packIndex < packCount; packIndex++) {
+                    TI_PAYLOAD.push({
+                        tiles: payload,
+                        vectors: vecPayload,
+                        polygons: polygons,
+                        dataIndex: baseLayer + packIndex,
+                        stencilIndex: tiledImageIndex,
+                        packIndex: packIndex,
+                        _temp: overallMatrix, // todo dirty
+                    });
+                }
             }
 
             // todo flatten render data
 
-            this.renderer.gl.clear(gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
+            this.renderer.gl.clearColor(1.0, 1.0, 1.0, 1.0);
+            this.renderer.gl.clear(this.renderer.gl.COLOR_BUFFER_BIT); // This ensures that areas that are not drawn into do not show old data
 
             this.renderer.firstPassProcessData(TI_PAYLOAD);
             return true;
@@ -674,6 +754,34 @@
             return ratio * viewportZoom;
         }
 
+        //todo: this could be called only on change of TI, not each frame!
+        _updatePackLayout() {
+            const world = this.viewer.world;
+            const itemCount = world.getItemCount();
+
+            let baseLayer = [];
+            let packCount = [];
+            let total = 0;
+
+            for (let i = 0; i < itemCount; i++) {
+                const ti = world.getItemAt(i);
+                const pc = ti && ti.__flexPackCount ? ti.__flexPackCount : 1;
+                baseLayer[i] = total;
+                packCount[i] = pc;
+                total += pc;
+                ti.__flexBaseLayer = baseLayer[i];
+            }
+
+            if (!this.renderer.__flexPackInfo) {
+                this.renderer.__flexPackInfo = { packCount: [], channelCount: [] };
+            }
+            this.renderer.__flexPackInfo.layout = {
+                baseLayer: baseLayer,
+                packCount: packCount,
+                totalLayers: total
+            };
+        }
+
         /**
          * @returns {Boolean} true
          */
@@ -767,222 +875,110 @@
         }
 
         internalCacheCreate(cache, tile) {
-            let tiledImage = tile.tiledImage;
-            let gl = this._gl;
-            let position;
+            const tiledImage = tile.tiledImage;
+            const normalized = this._normalizeCacheData(cache);
 
-            if (cache.type === "undefined") {
-                return null;
-            }
-
-            let data = cache.data;
-
-            if (data instanceof CanvasRenderingContext2D) {
-                data = data.canvas;
-            }
-
-            // NEW: vector geometry path (pre-tessellated triangles in tile UV space 0..1)
-            if (cache.type === "vector-mesh" || (data && (data.fills || data.lines || data.points))) {
-                const tileInfo = { texture: null, position: null, vectors: {} };
-
-                const buildBatch = (meshes) => {
-                    // Count totals
-                    let vCount = 0,
-                        iCount = 0;
-                    for (const m of meshes) {
-                        vCount += (m.vertices.length / 2);
-                        iCount += m.indices.length;
-                    }
-
-                    // Allocate batched arrays
-                    const positions = new Float32Array(vCount * 2);
-                    const colors    = new Uint8Array(vCount * 4);  // normalized RGBA
-                    const indices   = new Uint32Array(iCount);
-
-                    // Fill them
-                    let vOfs = 0,
-                        iOfs = 0,
-                        baseVertex = 0;
-                    for (const m of meshes) {
-                        positions.set(m.vertices, vOfs * 2);
-
-                        // fill color per-vertex (constant per feature)
-                        const rgba = m.color ? m.color : [0, 0, 0, 1];
-                        const r = Math.max(0, Math.min(255, Math.round(rgba[0] * 255)));
-                        const g = Math.max(0, Math.min(255, Math.round(rgba[1] * 255)));
-                        const b = Math.max(0, Math.min(255, Math.round(rgba[2] * 255)));
-                        const a = Math.max(0, Math.min(255, Math.round(rgba[3] * 255)));
-                        for (let k = 0; k < (m.vertices.length / 2); k++) {
-                            const cOfs = (vOfs + k) * 4;
-                            colors[cOfs + 0] = r;
-                            colors[cOfs + 1] = g;
-                            colors[cOfs + 2] = b;
-                            colors[cOfs + 3] = a;
-                        }
-
-                        // rebase indices
-                        for (let k = 0; k < m.indices.length; k++) {
-                            indices[iOfs + k] = baseVertex + m.indices[k];
-                        }
-
-                        vOfs += (m.vertices.length / 2);
-                        iOfs += m.indices.length;
-                        baseVertex += (m.vertices.length / 2);
-                    }
-
-                    // Upload once
-                    const vboPos = gl.createBuffer();
-                    gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
-                    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-
-                    const vboCol = gl.createBuffer();
-                    gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
-                    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
-
-                    const ibo = gl.createBuffer();
-                    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-                    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-
-                    return { vboPos, vboCol, ibo, count: indices.length };
-                };
-
-                if (data.fills && data.fills.length) {
-                    tileInfo.vectors.fills = buildBatch(data.fills);
-                }
-                if (data.lines && data.lines.length) {
-                    tileInfo.vectors.lines = buildBatch(data.lines);
-                }
-                if (data.points && data.points.length) {
-                    tileInfo.vectors.points = buildBatch(data.points);
-                }
-
-                return Promise.resolve(tileInfo);
-            }
-
-
-            // if (cache.type === "vector-mesh") {
-            //     // We keep per-primitive VBOs so first pass can draw them without re-uploading every frame
-            //     const tileInfo = { texture: null, position: null, vectors: [] };
-            //
-            //     const meshes = Array.isArray(data.meshes) ? data.meshes : [];
-            //     for (const m of meshes) {
-            //         const positions = (m && m.positions) instanceof Float32Array ? m.positions : null;
-            //         if (!positions || positions.length === 0) continue;
-            //
-            //         const color = m.color && m.color.length === 4 ? m.color : [1, 0, 0, 1]; // default red
-            //
-            //         const vbo = gl.createBuffer();
-            //         gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-            //         gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-            //         tileInfo.vectors.push({
-            //             buffer: vbo,
-            //             count: positions.length / 2,
-            //             color: new Float32Array(color)
-            //         });
-            //     }
-            //
-            //     return Promise.resolve(tileInfo);
-            // }
-
-            return createImageBitmap(data).then(data => {
-                // if (!tiledImage.isTainted()) {
-                // todo tained data handle
-                // if((data instanceof CanvasRenderingContext2D) && $.isCanvasTainted(data.canvas)){
-                //     tiledImage.setTainted(true);
-                //     $.console.warn('WebGL cannot be used to draw this TiledImage because it has tainted data. Does crossOriginPolicy need to be set?');
-                //     this._raiseDrawerErrorEvent(tiledImage, 'Tainted data cannot be used by the WebGLDrawer. Falling back to CanvasDrawer for this TiledImage.');
-                //     this.setInternalCacheNeedsRefresh();
-                // } else {
-                let sourceWidthFraction, sourceHeightFraction;
-                if (tile.sourceBounds) {
-                    sourceWidthFraction = Math.min(tile.sourceBounds.width, data.width) / data.width;
-                    sourceHeightFraction = Math.min(tile.sourceBounds.height, data.height) / data.height;
-                } else {
-                    sourceWidthFraction = 1;
-                    sourceHeightFraction = 1;
-                }
-
-                let overlap = tiledImage.source.tileOverlap;
-                if (overlap > 0){
-                    // calculate the normalized position of the rect to actually draw
-                    // discarding overlap.
-                    let tileMeta = this._getTileRenderMeta(tile, tiledImage);
-
-                    let left = (tile.x === 0 ? 0 : tileMeta.overlapX) * sourceWidthFraction;
-                    let top = (tile.y === 0 ? 0 : tileMeta.overlapY) * sourceHeightFraction;
-                    let right = (tile.isRightMost ? 1 : 1 - tileMeta.overlapX) * sourceWidthFraction;
-                    let bottom = (tile.isBottomMost ? 1 : 1 - tileMeta.overlapY) * sourceHeightFraction;
-                    position = new Float32Array([
-                        left, bottom,
-                        left, top,
-                        right, bottom,
-                        right, top
-                    ]);
-                } else {
-                    position = new Float32Array([
-                        0, sourceHeightFraction,
-                        0, 0,
-                        sourceWidthFraction, sourceHeightFraction,
-                        sourceWidthFraction, 0
-                    ]);
-                }
-
-                const tileInfo = {
-                    position: position,
-                    texture: null,
-                    vectors: undefined,
-                };
-
-                try {
-                    const texture = gl.createTexture();
-                    gl.bindTexture(gl.TEXTURE_2D, texture);
-
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this._imageSmoothingEnabled ? this._gl.LINEAR : this._gl.NEAREST);
-                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this._imageSmoothingEnabled ? this._gl.LINEAR : this._gl.NEAREST);
-                    //gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-
-                    // upload the image data into the texture
-                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, data);
-                    tileInfo.texture = texture;
-                    return tileInfo;
-                } catch (e){
-                    // Todo a bit dirty re-use of the tainted flag, but makes the code more stable
-                    tiledImage.setTainted(true);
-                    $.console.error('Error uploading image data to WebGL. Falling back to canvas renderer.', e);
-                    this._raiseDrawerErrorEvent(tiledImage, 'Unknown error when uploading texture. Falling back to CanvasDrawer for this TiledImage.');
-                    this.setInternalCacheNeedsRefresh();
-                }
-                // }
-                // }
-
-                // TODO fix this
-                // if (data instanceof Image) {
-                //     const canvas = document.createElement( 'canvas' );
-                //     canvas.width = data.width;
-                //     canvas.height = data.height;
-                //     const context = canvas.getContext('2d', { willReadFrequently: true });
-                //     context.drawImage( data, 0, 0 );
-                //     data = context;
-                // }
-                // if (data instanceof CanvasRenderingContext2D) {
-                //     return data;
-                // }
-                $.console.error("Unsupported data used for WebGL Drawer - probably a bug!");
-                return {};
+            return this.createTileInfoFromSource({
+                data: normalized.data,
+                type: normalized.type,
+                tile,
+                tiledImage
             }).catch(e => {
-                //TODO: support tile failure - if cache load fails in some way, the tile should be marked as such, and it should be allowed to enter rendering routine nevertheless
-                $.console.error(`Unsupported data type! ${data}`, e);
+                $.console.error(`Unsupported data type! ${normalized.data}`, e);
             });
         }
 
-        // internalCacheFree(data) {
-        //     if (data && data.texture) {
-        //         this._gl.deleteTexture(data.texture);
-        //         data.texture = null;
-        //     }
-        // }
+        async createTileInfoFromSource({ data, type, tile, tiledImage }) {
+            const gl = this._gl;
+
+            if (type === "undefined") {
+                return null;
+            }
+
+            if (type === "vector-mesh" || (data && (data.fills || data.lines || data.points))) {
+                return this._buildVectorTileInfo(data, gl);
+            }
+
+            const isGpuTextureSet = data &&
+                typeof data.getType === "function" &&
+                data.getType() === "gpuTextureSet";
+
+            if (isGpuTextureSet) {
+                const tileInfo = this._buildGpuTextureTileInfo(data, tile, tiledImage, gl);
+
+                if (this._packLayoutDirty) {
+                    this._packLayoutDirty = false;
+                    this._requestRebuild();
+                }
+
+                return tileInfo;
+            }
+
+            return this._buildBitmapTileInfo(data, tile, tiledImage, gl);
+        }
+
+        /**
+         * Compute normalized tile texture coordinates (UVs) in source image space,
+         * including overlap trimming. Works for both normal images and gpuTextureSet.
+         */
+        _computeTilePosition(tile, tiledImage, dataWidth, dataHeight) {
+            let sourceWidthFraction, sourceHeightFraction;
+
+            if (tile.sourceBounds) {
+                sourceWidthFraction = Math.min(tile.sourceBounds.width, dataWidth) / dataWidth;
+                sourceHeightFraction = Math.min(tile.sourceBounds.height, dataHeight) / dataHeight;
+            } else {
+                sourceWidthFraction = 1;
+                sourceHeightFraction = 1;
+            }
+
+            const overlap = tiledImage.source.tileOverlap;
+            if (overlap > 0) {
+                // calculate the normalized position of the rect to actually draw
+                // discarding overlap.
+                const tileMeta = this._getTileRenderMeta(tile, tiledImage);
+
+                const left   = (tile.x === 0 ? 0 : tileMeta.overlapX) * sourceWidthFraction;
+                const top    = (tile.y === 0 ? 0 : tileMeta.overlapY) * sourceHeightFraction;
+                const right  = (tile.isRightMost ? 1 : 1 - tileMeta.overlapX) * sourceWidthFraction;
+                const bottom = (tile.isBottomMost ? 1 : 1 - tileMeta.overlapY) * sourceHeightFraction;
+
+                return new Float32Array([
+                    left, bottom,
+                    left, top,
+                    right, bottom,
+                    right, top
+                ]);
+            } else {
+                return new Float32Array([
+                    0, sourceHeightFraction,
+                    0, 0,
+                    sourceWidthFraction, sourceHeightFraction,
+                    sourceWidthFraction, 0
+                ]);
+            }
+        }
+
+        _ensurePackLayout() {
+            if (this._packLayoutDirty) {
+                this._updatePackLayout();
+                this._packLayoutDirty = false;
+            }
+        }
+
+        _computeOffscreenLayerCount() {
+            const world = this.viewer.world;
+            const items = world._items || [];
+            let total = 0;
+
+            for (let i = 0; i < items.length; i++) {
+                const ti = items[i];
+                const packCount = ti && ti.__flexPackCount ? ti.__flexPackCount : 1;
+                total += packCount;
+            }
+
+            return Math.max(total, 1);
+        }
 
         internalCacheFree(data) {
             if (!data) {
@@ -1009,8 +1005,243 @@
                     gl.deleteBuffer(data.vectors.points.vboCol);
                     gl.deleteBuffer(data.vectors.points.ibo);
                 }
+                if (data.vectors.icons) {
+                    gl.deleteBuffer(data.vectors.icons.vboPos);
+                    gl.deleteBuffer(data.vectors.icons.vboCol);
+                    gl.deleteBuffer(data.vectors.icons.ibo);
+                }
                 data.vectors = null;
             }
+        }
+
+        // inside OpenSeadragon.FlexDrawer
+
+        _normalizeCacheData(cache) {
+            if (!cache || cache.type === "undefined") {
+                return { type: "undefined", data: null };
+            }
+
+            let data = cache.data;
+            if (data instanceof CanvasRenderingContext2D) {
+                data = data.canvas;
+            }
+
+            return {
+                type: cache.type,
+                data
+            };
+        }
+
+        _updatePackMetadata(tiledImage, packCount, channelCount) {
+            if (!tiledImage) {
+                return;
+            }
+
+            if (tiledImage.__flexPackCount !== packCount) {
+                tiledImage.__flexPackCount = packCount;
+                this._packLayoutDirty = true;
+            }
+            if (tiledImage.__flexChannelCount !== channelCount) {
+                tiledImage.__flexChannelCount = channelCount;
+                this._packLayoutDirty = true;
+            }
+
+            if (this.renderer && !this.renderer.__flexPackInfo) {
+                this.renderer.__flexPackInfo = {
+                    packCount: [],
+                    channelCount: [],
+                };
+            }
+
+            if (this.renderer && this.renderer.__flexPackInfo && this.viewer.world) {
+                const tiIndex = this.viewer.world.getIndexOfItem(tiledImage);
+                if (tiIndex >= 0) {
+                    this.renderer.__flexPackInfo.packCount[tiIndex] = packCount;
+                    this.renderer.__flexPackInfo.channelCount[tiIndex] = channelCount;
+                }
+            }
+        }
+
+        _buildVectorTileInfo(data, gl) {
+            const tileInfo = {
+                position: null,
+                texture: null,
+                vectors: {}
+            };
+
+            const buildBatch = (meshes) => {
+                let vCount = 0,
+                    iCount = 0;
+                for (const m of meshes) {
+                    vCount += (m.vertices.length / 4);
+                    iCount += m.indices.length;
+                }
+
+                const positions = new Float32Array(vCount * 4);
+                const parameters = new Float32Array(vCount * 4);
+                const indices = new Uint32Array(iCount);
+
+                let vOfs = 0,
+                    iOfs = 0,
+                    baseVertex = 0;
+
+                for (const m of meshes) {
+                    positions.set(m.vertices, vOfs * 4);
+
+                    // fill color per-vertex (constant per feature)
+                    const rgba = m.color ? m.color : [0, 0, 0, 1];
+                    const r = Math.max(0.0, Math.min(1.0, rgba[0]));
+                    const g = Math.max(0.0, Math.min(1.0, rgba[1]));
+                    const b = Math.max(0.0, Math.min(1.0, rgba[2]));
+                    const a = Math.max(0.0, Math.min(1.0, rgba[3]));
+                    for (let k = 0; k < (m.vertices.length / 4); k++) {
+                        const pOfs = (vOfs + k) * 4;
+                        parameters[pOfs + 0] = r;
+                        parameters[pOfs + 1] = g;
+                        parameters[pOfs + 2] = b;
+                        parameters[pOfs + 3] = a;
+                    }
+
+                    // if parameters are specified from mesh
+                    if (m.parameters) {
+                        parameters.set(m.parameters, vOfs * 4);
+                    }
+
+                    // rebase indices
+                    for (let k = 0; k < m.indices.length; k++) {
+                        indices[iOfs + k] = baseVertex + m.indices[k];
+                    }
+
+                    vOfs += (m.vertices.length / 4);
+                    iOfs += m.indices.length;
+                    baseVertex += (m.vertices.length / 4);
+                }
+
+                // Upload once
+                const vboPos = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
+                gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+                const vboParam = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, vboParam);
+                gl.bufferData(gl.ARRAY_BUFFER, parameters, gl.STATIC_DRAW);
+
+                const ibo = gl.createBuffer();
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+                return { vboPos, vboParam, ibo, count: indices.length };
+            };
+
+            if (data.fills && data.fills.length) {
+                tileInfo.vectors.fills = buildBatch(data.fills);
+            }
+            if (data.lines && data.lines.length) {
+                tileInfo.vectors.lines = buildBatch(data.lines);
+            }
+            if (data.points && data.points.length) {
+                tileInfo.vectors.points = buildBatch(data.points);
+            }
+            if (data.icons && data.icons.length) {
+                tileInfo.vectors.icons = buildBatch(data.icons);
+            }
+
+            return tileInfo;
+        }
+
+        _buildGpuTextureTileInfo(gpu, tile, tiledImage, gl) {
+            const width = gpu.width;
+            const height = gpu.height;
+            const packs = gpu.packs || [];
+            const packCount = packs.length || 1;
+            const channelCount = gpu.channelCount || packCount * 4;
+
+            this._updatePackMetadata(tiledImage, packCount, channelCount);
+
+            const tileInfo = {
+                position: this._computeTilePosition(tile, tiledImage, width, height),
+                texture: null,
+                vectors: undefined,
+            };
+
+            const texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+
+            const firstFmt = (packs[0] && packs[0].format) || "RGBA8";
+            const internalFormat = (firstFmt === "RGBA16F") ? gl.RGBA16F : gl.RGBA8;
+            const format = gl.RGBA;
+            const type = (firstFmt === "RGBA16F") ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+
+            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, internalFormat, width, height, packCount);
+
+            for (let layer = 0; layer < packCount; layer++) {
+                const pack = packs[layer];
+                if (!pack) {
+                    continue;
+                }
+
+                gl.texSubImage3D(
+                    gl.TEXTURE_2D_ARRAY,
+                    0,
+                    0, 0, layer,
+                    width, height, 1,
+                    format,
+                    type,
+                    pack.data
+                );
+            }
+
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            tileInfo.texture = texture;
+            return tileInfo;
+        }
+
+        async _buildBitmapTileInfo(data, tile, tiledImage, gl) {
+            // if (!tiledImage.isTainted()) {
+            // todo tained data handle
+            // if((data instanceof CanvasRenderingContext2D) && $.isCanvasTainted(data.canvas)){
+            //     tiledImage.setTainted(true);
+            //     $.console.warn('WebGL cannot be used to draw this TiledImage because it has tainted data. Does crossOriginPolicy need to be set?');
+            //     this._raiseDrawerErrorEvent(tiledImage, 'Tainted data cannot be used by the WebGLDrawer. Falling back to CanvasDrawer for this TiledImage.');
+            //     this.setInternalCacheNeedsRefresh();
+            // } else {
+
+            const bitmap = await createImageBitmap(data);
+
+            const width = bitmap.width;
+            const height = bitmap.height;
+
+            const tileInfo = {
+                position: this._computeTilePosition(tile, tiledImage, width, height),
+                texture: null,
+                vectors: undefined,
+            };
+
+            const tex = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+
+            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, width, height, 1);
+            gl.texSubImage3D(
+                gl.TEXTURE_2D_ARRAY,
+                0,
+                0, 0, 0,
+                width, height, 1,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                bitmap
+            );
+
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            tileInfo.texture = tex;
+            return tileInfo;
         }
 
         _setClip(){

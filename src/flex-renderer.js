@@ -46,7 +46,8 @@
 
     /**
      * @typedef {Object} RenderOutput
-     * @property {Number} sourcesLength
+     * @property {Number} textureDepth
+     * @property {Number} stencilDepth
      */
 
     /**
@@ -78,11 +79,13 @@
          * @param {Boolean} incomingOptions.interactive             if true (default), the layers are configured for interactive changes (not applied by default)
          * @param {HTMLControlsHandler} incomingOptions.htmlHandler function that ensures individual ShaderLayer's controls' HTML is properly present at DOM
          * @param {function} incomingOptions.htmlReset              callback called when a program is reset - html needs to be cleaned
+         * @param {string|undefined} incomingOptions.backgroundColor #RGB or #RGBA hex, default undefined - transparent
          *
          * @param {Object} incomingOptions.canvasOptions
          * @param {Boolean} incomingOptions.canvasOptions.alpha
          * @param {Boolean} incomingOptions.canvasOptions.premultipliedAlpha
          * @param {Boolean} incomingOptions.canvasOptions.stencil
+         *
          *
          * @constructor
          * @memberof FlexRenderer
@@ -103,6 +106,7 @@
             this.interactive = incomingOptions.interactive === undefined ?
                 !!incomingOptions.htmlHandler : !!incomingOptions.interactive;
             this.htmlHandler = this.interactive ? incomingOptions.htmlHandler : null;
+            this._background = incomingOptions.backgroundColor || '#00000000';
 
             if (this.htmlHandler) {
                 if (!incomingOptions.htmlReset) {
@@ -177,11 +181,21 @@
          * @instance
          * @memberof FlexRenderer
          */
-        setDimensions(x, y, width, height, levels) {
+        setDimensions(x, y, width, height, levels, tiledImageCount) {
             this.canvas.width = width;
             this.canvas.height = height;
             this.gl.viewport(x, y, width, height);
-            this.webglContext.setDimensions(x, y, width, height, levels);
+            this.webglContext.setDimensions(x, y, width, height, levels, tiledImageCount);
+        }
+
+        /**
+         * Set viewer background color, supports #RGBA or #RGB syntax. Note that setting the value
+         * does not do anything until you recompile the shaders and should be done as early as possible,
+         * at best using the constructor options.
+         * @param (background)
+         */
+        setBackground(background) {
+            this._background = background || '#00000000';
         }
 
         /**
@@ -212,11 +226,10 @@
             const result = program.use(this.__firstPassResult, source, undefined);
 
             if (this.debug) {
-                this._showOffscreenMatrix(result, source.length, {scale: 0.5, pad: 8});
+                this._showOffscreenMatrix(result, {scale: 0.5, pad: 8});
             }
 
             this.__firstPassResult = result;
-            this.__firstPassResult.sourcesLength = source.length;
             return result;
         }
 
@@ -252,6 +265,7 @@
             if (!program) {
                 program = this._programImplementations[key];
             }
+            // TODO consider deleting only if succesfully compiled to avoid critical errors
             if (this._programImplementations[key]) {
                 this.deleteProgram(key);
             }
@@ -269,6 +283,9 @@
                     this.createShaderLayer(shaderId, config, false);
                 }
             }
+            // Needs reference early
+            this._programImplementations[key] = program;
+            this.webglContext.setBackground(this._background);
 
             program.build(this._shaders, this.getShaderLayerOrder());
             // Used also to re-compile, set requiresLoad to true
@@ -278,17 +295,18 @@
             if (errMsg) {
                 this.gl.deleteProgram(webglProgram);
                 program._webGLProgram = null;
-                throw Error(errMsg);
+                this._programImplementations[key] = null;
+                throw new Error(errMsg);
             }
 
-            this._programImplementations[key] = program;
             if ($.FlexRenderer.WebGLImplementation._compileProgram(
                 webglProgram, this.gl, program, $.console.error, this.debug
             )) {
                 this.gl.useProgram(webglProgram);
-                program.created(webglProgram, this.canvas.width, this.canvas.height);
+                program.created(this.canvas.width, this.canvas.height);
                 return key;
             }
+            // else todo consider some cleanup
             return undefined;
         }
 
@@ -608,7 +626,7 @@
                     dstGL: dst.gl,
                     srcTex: renderOutput.texture,
                     dstTex: prevDstTex,
-                    textureLayerCount: renderOutput.sourcesLength,
+                    textureLayerCount: renderOutput.textureDepth,
                     level,
                     format,
                     type,
@@ -626,7 +644,7 @@
                     dstGL: dst.gl,
                     srcTex: renderOutput.stencil,
                     dstTex: prevDstStencil,
-                    textureLayerCount: renderOutput.sourcesLength,
+                    textureLayerCount: renderOutput.stencilDepth,
                     level,
                     format,
                     type,
@@ -634,7 +652,8 @@
                 });
             }
 
-            out.sourcesLength = renderOutput.sourcesLength || 0;
+            out.textureDepth = renderOutput.textureDepth || 0;
+            out.stencilDepth = renderOutput.stencilDepth || 0;
             dst.__firstPassResult = out;
             return out;
         }
@@ -822,15 +841,17 @@
             return dstTex;
         }
 
-        _showOffscreenMatrix(renderOutput, length, {
+        _showOffscreenMatrix(renderOutput, {
             scale = 1,
             pad = 8,
             drawLabels = true,
             background = '#111'
         } = {}) {
-            // 2 columns: [Texture, Stencil], `length` rows
+            const colorLayers = renderOutput.textureDepth;
+            const stencilLayers = renderOutput.stencilDepth;
+
             const cols = 2;
-            const rows = length;
+            const rows = colorLayers;
             const width = Math.floor(this.canvas.width);
             const height = Math.floor(this.canvas.height);
             const cellW = Math.floor(width * scale);
@@ -897,7 +918,7 @@
             };
 
             // Iterate rows: each row = {texture i, stencil i}
-            for (let i = 0; i < length; i++) {
+            for (let i = 0; i < colorLayers; i++) {
                 // ---- texture ----
                 if (isGL2 && renderOutput.texture /* texture array */) {
                     attachLayer(renderOutput.texture, i);
@@ -920,8 +941,9 @@
                 ctx.drawImage(stage, 0, 0, width, height, xTex, yRow, cellW, cellH);
 
                 // ---- stencil ----
-                if (isGL2 && renderOutput.stencil /* texture array */) {
-                    attachLayer(renderOutput.stencil, i);
+                if (isGL2 && renderOutput.stencil /* texture array */ && stencilLayers > 0) {
+                    const stencilLayer = Math.min(i, stencilLayers - 1);
+                    attachLayer(renderOutput.stencil, stencilLayer);
                 } else {
                     console.error('No valid texture binding for "stencil" at index', i);
                     continue;
