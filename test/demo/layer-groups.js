@@ -85,6 +85,11 @@ viewer.addTiledImage({
     index: 2,
 });
 
+viewer.addTiledImage({
+    tileSource: sources["duomo"],
+    index: 3,
+});
+
 let shaderLayerConfig = {
     "rainbow": {
         "type": "identity",
@@ -102,6 +107,10 @@ let shaderLayerConfig = {
                 "tiledImages": [2],
             },
         },
+    },
+    "duomo": {
+        "type": "identity",
+        "tiledImages": [3],
     },
 };
 

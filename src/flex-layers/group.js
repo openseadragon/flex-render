@@ -174,8 +174,6 @@ new_color = ${previousShaderLayer.uid}_blend_func(vec4(0.0), new_color);`;
                         continue;
                     }
 
-                    const global_i
-
                     execution += `
     instance_id = ${i};
     stencilPasses = osd_stencil_texture(${i}, 0, v_texture_coords).r > 0.995;
