@@ -659,6 +659,15 @@
             return true;
         }
 
+        /**
+         * Collects shader layer variables (opacity, pixelSize, zoom) into one flat array,
+         * group shader layers are followed by their child layers in the order specified by the group
+         * @param shaders
+         * @param shaderOrder
+         * @param viewport
+         * @returns {*[]}
+         * @private
+         */
         _collectShaderUniforms(shaders, shaderOrder, viewport) {
             const sources = [];
 
