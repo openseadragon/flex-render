@@ -362,12 +362,17 @@
                     if (this.htmlHandler) {
                         this.htmlReset();
 
-                        for (const shaderLayer of this.getFlatShaderLayers()) {
-                            this.htmlHandler(
-                                shaderLayer,
-                                shaderLayer.__shaderConfig
-                            );
-                        }
+                        this.forEachShaderLayerWithContext(
+                            this._shaders,
+                            this.getShaderLayerOrder(),
+                            (shaderLayer, shaderId, shaderConfig, htmlContext) => {
+                                this.htmlHandler(
+                                    shaderLayer,
+                                    shaderConfig,
+                                    htmlContext
+                                );
+                            }
+                        );
 
                         this.raiseEvent('html-controls-created', {
                             name: name,
@@ -543,6 +548,65 @@
             });
 
             return flat;
+        }
+
+        forEachShaderLayerWithContext(
+            shaderMap = this._shaders,
+            shaderOrder = this.getShaderLayerOrder(),
+            callback,
+            parentContext = null
+        ) {
+            if (!shaderMap || !shaderOrder || !callback) {
+                return;
+            }
+
+            const depth = parentContext ? parentContext.depth + 1 : 0;
+
+            for (let index = 0; index < shaderOrder.length; index++) {
+                const shaderId = shaderOrder[index];
+                const shaderLayer = shaderMap[shaderId];
+                if (!shaderLayer) {
+                    continue;
+                }
+
+                const shaderConfig = shaderLayer.__shaderConfig || shaderLayer.getConfig();
+                const path = parentContext ? parentContext.path.concat([shaderId]) : [shaderId];
+                const hasChildren = !!(
+                    shaderLayer.constructor.type() === "group" &&
+                    shaderLayer.shaderLayers &&
+                    shaderLayer.shaderLayerOrder &&
+                    shaderLayer.shaderLayerOrder.length
+                );
+
+                const htmlContext = {
+                    depth: depth,
+                    index: index,
+                    path: path,
+                    pathString: path.join("/"),
+                    isGroupChild: !!parentContext,
+                    parentShader: parentContext ? parentContext.shaderLayer : null,
+                    parentConfig: parentContext ? parentContext.shaderConfig : null,
+                    parentShaderId: parentContext ? parentContext.shaderId : null,
+                    hasChildren: hasChildren,
+                };
+
+                callback(shaderLayer, shaderId, shaderConfig, htmlContext);
+
+                if (hasChildren) {
+                    this.forEachShaderLayerWithContext(
+                        shaderLayer.shaderLayers,
+                        shaderLayer.shaderLayerOrder,
+                        callback,
+                        {
+                            depth: depth,
+                            path: path,
+                            shaderLayer: shaderLayer,
+                            shaderConfig: shaderConfig,
+                            shaderId: shaderId,
+                        }
+                    );
+                }
+            }
         }
 
         /**

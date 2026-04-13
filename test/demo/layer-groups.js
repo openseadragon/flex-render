@@ -17,13 +17,14 @@ const labels = {
     japan: "Japan",
 };
 
-const drawer = "flex-renderer"
+const drawer = "flex-renderer";
 const drawerOptions = {
     "flex-renderer": {
         debug: true,
         webGLPreferredVersion: "2.0",
-        htmlHandler: (shaderLayer, shaderConfig) => {
+        htmlHandler: (shaderLayer, shaderConfig, htmlContext = {}) => {
             const container = document.getElementById('my-shader-ui-container');
+
             // Be careful, shaderLayer.id is changing. It should not be used as a key to identify the layer between
             // different programs such as in this case, but it's okay to use it when referencing concrete running layer.
 
@@ -32,11 +33,160 @@ const drawerOptions = {
             // its visibility (but we do not manage change event and thus users cannot change it). In case of error, we show
             // the error message below the checkbox.
             // The compulsory step is to include `shaderLayer.htmlControls()` output.
-            container.insertAdjacentHTML('beforeend', `<div>
-    <input type="checkbox" disabled id="enable-layer-${shaderLayer.id}" ${shaderConfig.visible ? 'checked' : ''}><span>${shaderConfig.name || shaderConfig.type}</span>
-    <div>${shaderLayer.error || ""}</div>
-    ${shaderLayer.htmlControls()}
-</div>`);
+
+            if (!container || !shaderLayer) {
+                return "";
+            }
+
+            const renderer = shaderLayer.webglContext && shaderLayer.webglContext.renderer;
+            const drawer = renderer && renderer.drawer ? renderer.drawer : null;
+
+            const depth = Number.isFinite(htmlContext.depth) ? htmlContext.depth : 0;
+            const isGroupChild = !!htmlContext.isGroupChild;
+            const isGroup = shaderConfig.type === "group";
+            const parentName = htmlContext.parentConfig ?
+                (htmlContext.parentConfig.name || htmlContext.parentConfig.type || htmlContext.parentShaderId) :
+                null;
+
+            const pathString = htmlContext.pathString || shaderLayer.id;
+            const pathClass = pathString.replace(/[^0-9a-zA-Z_-]/g, '_');
+
+            const wrapper = document.createElement("div");
+            wrapper.className =
+                `shader-control-card shader-control-card--depth-${depth} ` +
+                `${isGroupChild ? 'shader-control-card--group-child' : 'shader-control-card--top'} ` +
+                `${isGroup ? 'shader-control-card--group' : ''} shader-control-card--${pathClass}`;
+            wrapper.dataset.shaderId = shaderLayer.id;
+            wrapper.dataset.shaderPath = pathString;
+            wrapper.dataset.shaderDepth = String(depth);
+            wrapper.dataset.groupChild = isGroupChild ? "true" : "false";
+
+            wrapper.style.marginLeft = `${depth * 18}px`;
+            wrapper.style.marginBottom = "10px";
+            wrapper.style.padding = "10px 12px";
+            wrapper.style.border = "1px solid #d1d5db";
+            wrapper.style.borderLeft = isGroupChild ? "4px solid #9ca3af" : "1px solid #d1d5db";
+            wrapper.style.borderRadius = "8px";
+            wrapper.style.background = isGroupChild ? "#fafafa" : "#f3f3f3";
+
+            const header = document.createElement("div");
+            header.style.display = "flex";
+            header.style.alignItems = "flex-start";
+            header.style.justifyContent = "space-between";
+            header.style.gap = "10px";
+            header.style.marginBottom = "6px";
+
+            const titleWrap = document.createElement("div");
+            titleWrap.style.minWidth = "0";
+
+            const label = document.createElement("label");
+            label.style.display = "flex";
+            label.style.alignItems = "center";
+            label.style.gap = "6px";
+            label.style.fontWeight = "600";
+            label.style.margin = "0";
+
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = !!shaderConfig.visible;
+
+            const title = document.createElement("span");
+            title.textContent = shaderConfig.name || shaderConfig.type;
+
+            label.appendChild(checkbox);
+            label.appendChild(title);
+            titleWrap.appendChild(label);
+
+            if (isGroupChild && parentName) {
+                const parentLabel = document.createElement("div");
+                parentLabel.style.fontSize = "12px";
+                parentLabel.style.color = "#6b7280";
+                parentLabel.style.marginTop = "2px";
+                parentLabel.textContent = `In group: ${parentName}`;
+                titleWrap.appendChild(parentLabel);
+            }
+
+            const badges = document.createElement("div");
+            badges.style.display = "flex";
+            badges.style.gap = "6px";
+            badges.style.flexWrap = "wrap";
+            badges.style.justifyContent = "flex-end";
+
+            if (isGroup) {
+                const groupBadge = document.createElement("span");
+                groupBadge.textContent = "Group";
+                groupBadge.style.fontSize = "11px";
+                groupBadge.style.padding = "2px 6px";
+                groupBadge.style.border = "1px solid #9ca3af";
+                groupBadge.style.borderRadius = "999px";
+                groupBadge.style.background = "#ffffff";
+                groupBadge.style.color = "#374151";
+                groupBadge.style.whiteSpace = "nowrap";
+                badges.appendChild(groupBadge);
+            }
+
+            if (isGroupChild) {
+                const childBadge = document.createElement("span");
+                childBadge.textContent = `Level ${depth}`;
+                childBadge.style.fontSize = "11px";
+                childBadge.style.padding = "2px 6px";
+                childBadge.style.borderRadius = "999px";
+                childBadge.style.background = "#e5e7eb";
+                childBadge.style.color = "#374151";
+                childBadge.style.whiteSpace = "nowrap";
+                badges.appendChild(childBadge);
+            }
+
+            header.appendChild(titleWrap);
+            header.appendChild(badges);
+            wrapper.appendChild(header);
+
+            if (shaderLayer.error) {
+                const errorNode = document.createElement("div");
+                errorNode.style.marginBottom = "8px";
+                errorNode.style.color = "#b91c1c";
+                errorNode.style.fontSize = "12px";
+                errorNode.textContent = shaderLayer.error;
+                wrapper.appendChild(errorNode);
+            }
+
+            const controls = document.createElement("div");
+            controls.className = "shader-control-card__controls";
+            controls.innerHTML = shaderLayer.htmlControls();
+            wrapper.appendChild(controls);
+
+            checkbox.addEventListener("change", () => {
+                const config = shaderLayer.getConfig ? shaderLayer.getConfig() : shaderConfig;
+                const visible = checkbox.checked ? 1 : 0;
+
+                config.visible = visible;
+                shaderConfig.visible = visible;
+
+                if (renderer && typeof renderer.notifyVisualizationChanged === "function") {
+                    renderer.notifyVisualizationChanged({
+                        reason: "visibility-change",
+                        shaderId: shaderLayer.id,
+                        shaderType: shaderLayer.constructor.type(),
+                        visible: visible
+                    });
+                }
+
+                if (drawer && typeof drawer.rebuild === "function") {
+                    drawer.rebuild();
+                    return;
+                }
+
+                if (typeof shaderLayer._rebuild === "function") {
+                    shaderLayer._rebuild();
+                }
+
+                if (typeof shaderLayer.invalidate === "function") {
+                    shaderLayer.invalidate();
+                }
+            });
+
+            container.appendChild(wrapper);
+            return "";
         },
         htmlReset: () => {
             const container = document.getElementById('my-shader-ui-container');
@@ -92,23 +242,28 @@ viewer.addTiledImage({
 
 let shaderLayerConfig = {
     "rainbow": {
+        "name": "Rainbow",
         "type": "identity",
         "tiledImages": [0],
     },
     "g": {
+        "name": "Group Layer",
         "type": "group",
         "shaders": {
             "leaves": {
-                "type": "identity",
+                "name": "Leaves",
+                "type": "heatmap",
                 "tiledImages": [1],
             },
             "bblue": {
+                "name": "Blue B",
                 "type": "identity",
                 "tiledImages": [2],
             },
         },
     },
     "duomo": {
+        "name": "Duomo",
         "type": "identity",
         "tiledImages": [3],
     },
