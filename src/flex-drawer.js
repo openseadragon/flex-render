@@ -670,12 +670,12 @@
          */
         _collectShaderUniforms(shaders, shaderOrder, viewport) {
             const sources = [];
+            const flatShaders = this.renderer.getFlatShaderLayers(shaders, shaderOrder);
 
-            for (let id of shaderOrder) {
-                const shader = shaders[id];
+            for (const shader of flatShaders) {
                 const config = shader.getConfig();
-
-                const tiledImage = this.viewer.world.getItemAt(config.tiledImages[0]);
+                const hasSources = Array.isArray(config.tiledImages) && config.tiledImages.length > 0;
+                const tiledImage = hasSources ? this.viewer.world.getItemAt(config.tiledImages[0]) : null;
 
                 sources.push({
                     zoom: viewport.zoom,
@@ -683,10 +683,6 @@
                     opacity: tiledImage ? tiledImage.getOpacity() : 1,
                     shader: shader,
                 });
-
-                if (shader.constructor.type() === "group") {
-                    sources.push(...this._collectShaderUniforms(shader.shaderLayers, shader.shaderLayerOrder, viewport));
-                }
             }
 
             return sources;

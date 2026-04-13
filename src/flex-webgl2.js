@@ -396,9 +396,18 @@ ${execution}
             return;
         }
 
-        // todo consider clip test before setting intermediate color -> but we would have to test all clips, not just one
-        //   no clip: whole viewport has the color
-        //   clip: only rendered parts have the background color (likely more desirable)
+        const renderer = this.context && this.context.renderer;
+        if (!renderer || typeof renderer.getFlatShaderLayers !== "function") {
+            throw new Error(
+                "$.FlexRenderer.WebGL20.SecondPassProgram::build: renderer.getFlatShaderLayers() is not available."
+            );
+        }
+
+        const flatShaders = renderer.getFlatShaderLayers(shaderMap, keyOrder);
+        for (let slot = 0; slot < flatShaders.length; slot++) {
+            flatShaders[slot].__renderSlot = slot;
+        }
+
         let definition = "";
         let execution = `
     vec4 intermediate_color = ${this._bgColor};
@@ -424,40 +433,44 @@ ${shader.getFragmentShaderExecution()}
 `;
         };
 
-        let remainingBlenForShaderID = '';
-        const getRemainingBlending = () => { //todo next blend argument
-            if (remainingBlenForShaderID) {
-                const i = keyOrder.indexOf(remainingBlenForShaderID);
-                const shader = shaderMap[remainingBlenForShaderID];
-                // Set stencilPasses again: we are going to blend deferred data
-                return `
-    stencilPasses = osd_stencil_texture(${i}, 0, v_texture_coords).r > 0.995;
-    overall_color = ${shader.mode === "show" ? "blend_source_over" : shader.uid + "_blend_func"}(intermediate_color, overall_color);
-`;
+        const getStencilPassCode = shader => {
+            const shaderConfig = shader.getConfig();
+            const hasSources = Array.isArray(shaderConfig.tiledImages) && shaderConfig.tiledImages.length > 0;
+
+            if (!hasSources) {
+                return "    stencilPasses = true;";
             }
-            return '';
+
+            return `    stencilPasses = osd_stencil_texture(${shader.__renderSlot}, 0, v_texture_coords).r > 0.995;`;
         };
 
-        let i = 0;
-        for (; i < keyOrder.length; i++) {
-            const shaderLayerId = keyOrder[i];
+        let remainingBlendShader = null;
+        const getRemainingBlending = () => {
+            if (!remainingBlendShader) {
+                return "";
+            }
+
+            return `
+${getStencilPassCode(remainingBlendShader)}
+    overall_color = ${remainingBlendShader.mode === "show" ? "blend_source_over" : remainingBlendShader.uid + "_blend_func"}(intermediate_color, overall_color);
+`;
+        };
+
+        for (const shaderLayerId of keyOrder) {
             const shaderLayer = shaderMap[shaderLayerId];
             const shaderLayerConfig = shaderLayer.getConfig();
-
-            const opacityModifier = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : 'opacity';
+            const slot = shaderLayer.__renderSlot;
+            const opacityModifier = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
 
             execution += `\n    // ${shaderLayer.uid}\n`;
 
             if (shaderLayerConfig.type === "none" || shaderLayerConfig.error || !shaderLayerConfig.visible) {
-                // prevents the layer from being accounted for in the rendering (error or not visible)
-
-                // For explanation of this logics see main shader part below
                 if (shaderLayer._mode !== "clip") {
                     execution += `${getRemainingBlending()}
     // ${shaderLayer.uid} - Disabled (error or visible = false)
     intermediate_color = vec4(0.0);
 `;
-                    remainingBlenForShaderID = shaderLayerId;
+                    remainingBlendShader = shaderLayer;
                 } else {
                     execution += `
     // ${shaderLayer.uid} - Disabled with Clipmask (error or visible = false)
@@ -471,26 +484,21 @@ ${shader.getFragmentShaderExecution()}
             addShaderDefinition(shaderLayer);
 
             execution += `
-    instance_id = ${i};
-    stencilPasses = osd_stencil_texture(${i}, 0, v_texture_coords).r > 0.995;
-    attrs = u_shaderVariables[${i}];
+    instance_id = ${slot};
+${getStencilPassCode(shaderLayer)}
+    attrs = u_shaderVariables[${slot}];
     opacity = attrs.x;
     pixelSize = attrs.y;
     zoom = attrs.z;
 `;
 
-            // To understand the code below: show & mask are basically same modes: they blend atop
-            // of existing data. 'Show' just uses built-in alpha blending.
-            // However, clip blends on the previous output only (and it can chain!).
-
             if (shaderLayer._mode !== "clip") {
-                    execution += `${getRemainingBlending()}
+                execution += `${getRemainingBlending()}
     // ${shaderLayer.uid} - blending
     intermediate_color = ${shaderLayer.uid}_execution();
     intermediate_color.a = intermediate_color.a * ${opacityModifier};
 `;
-
-                remainingBlenForShaderID = shaderLayerId;
+                remainingBlendShader = shaderLayer;
             } else {
                 execution += `
     // ${shaderLayer.uid} - clipping
@@ -499,16 +507,21 @@ ${shader.getFragmentShaderExecution()}
     intermediate_color = ${shaderLayer.uid}_blend_func(clip_color, intermediate_color);
 `;
             }
-        } // end of for cycle
+        }
 
-        if (remainingBlenForShaderID) {
+        if (remainingBlendShader) {
             execution += getRemainingBlending();
         }
 
         execution += "\n    final_color = overall_color;\n";
 
         this.vertexShader = this._getVertexShaderSource();
-        this.fragmentShader = this._getFragmentShaderSource(definition, execution, customBlendFunctions, $.FlexRenderer.ShaderLayer.__globalIncludes);
+        this.fragmentShader = this._getFragmentShaderSource(
+            definition,
+            execution,
+            customBlendFunctions,
+            $.FlexRenderer.ShaderLayer.__globalIncludes
+        );
     }
 
     /**

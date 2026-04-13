@@ -26,6 +26,8 @@
             }
 
             createShaderLayer(id, config) {
+                id = $.FlexRenderer.sanitizeKey(id);
+
                 const ShaderLayer = $.FlexRenderer.ShaderMediator.getClass(config.type);
                 if (!ShaderLayer) {
                     throw new Error(`Unknown shader layer type '${config.type}'`);
@@ -37,7 +39,7 @@
                     type: "identity",
                     visible: 1,
                     fixed: false,
-                    tiledImages: [0],
+                    tiledImages: [],
                     params: {},
                     cache: {},
                 };
@@ -91,6 +93,19 @@
                 }
             }
 
+            destroy() {
+                if (this.shaderLayers) {
+                    for (let id in this.shaderLayers) {
+                        if (this.shaderLayers[id]) {
+                            this.shaderLayers[id].destroy();
+                        }
+                    }
+                }
+
+                this.shaderLayers = {};
+                this.shaderLayerOrder = [];
+            }
+
             glLoaded(program, gl) {
                 super.glLoaded(program, gl);
 
@@ -138,75 +153,79 @@ vec4 compute_${shaderLayer.uid}() {
                 const shaderMap = this.shaderLayers;
                 const keyOrder = this.shaderLayerOrder;
 
-                let remainingBlenForShaderID = '';
-                const getRemainingBlending = () => { //todo next blend argument
-                    if (remainingBlenForShaderID) {
-                        const shader = shaderMap[remainingBlenForShaderID];
-                        // stencilPasses override removed, currently using the stencil for the whole group, will need extra logic if we want stencil checks for every child separate
-                        return `
-    combined_color = ${shader.mode === "show" ? "blend_source_over" : shader.uid + "_blend_func"}(new_color, combined_color);
-`;
+                const getStencilPassCode = shader => {
+                    const shaderConfig = shader.getConfig();
+                    const hasSources = Array.isArray(shaderConfig.tiledImages) && shaderConfig.tiledImages.length > 0;
+
+                    if (!hasSources) {
+                        return "    stencilPasses = true;";
                     }
-                    return '';
+
+                    return `    stencilPasses = osd_stencil_texture(${shader.__renderSlot}, 0, v_texture_coords).r > 0.995;`;
                 };
 
-                let i = 0;
-                for (; i < keyOrder.length; i++) {
-                    const previousShaderID = keyOrder[i];
-                    const previousShaderLayer = shaderMap[previousShaderID];
-                    const shaderConf = previousShaderLayer.getConfig();
+                let remainingBlendShader = null;
+                const getRemainingBlending = () => {
+                    if (!remainingBlendShader) {
+                        return "";
+                    }
 
-                    const opacityModifier = previousShaderLayer.opacity ? `opacity * ${previousShaderLayer.opacity.sample()}` : 'opacity';
+                    return `
+${getStencilPassCode(remainingBlendShader)}
+    combined_color = ${remainingBlendShader.mode === "show" ? "blend_source_over" : remainingBlendShader.uid + "_blend_func"}(new_color, combined_color);
+`;
+                };
+
+                for (const shaderId of keyOrder) {
+                    const shaderLayer = shaderMap[shaderId];
+                    const shaderConf = shaderLayer.getConfig();
+                    const slot = shaderLayer.__renderSlot;
+                    const opacityModifier = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
+
                     if (shaderConf.type === "none" || shaderConf.error || !shaderConf.visible) {
-                        //prevents the layer from being accounted for in the rendering (error or not visible)
-
-                        // For explanation of this logics see main shader part below
-                        if (previousShaderLayer._mode !== "clip") {
+                        if (shaderLayer._mode !== "clip") {
                             execution += `${getRemainingBlending()}
-// ${previousShaderLayer.constructor.type()} - Disabled (error or visible = false)
+// ${shaderLayer.constructor.type()} - Disabled (error or visible = false)
 new_color = vec4(0.0);`;
-                            remainingBlenForShaderID = previousShaderID;
+                            remainingBlendShader = shaderLayer;
                         } else {
                             execution += `
-// ${previousShaderLayer.constructor.type()} - Disabled with Clipmask (error or visible = false)
-new_color = ${previousShaderLayer.uid}_blend_func(vec4(0.0), new_color);`;
+// ${shaderLayer.constructor.type()} - Disabled with Clipmask (error or visible = false)
+new_color = ${shaderLayer.uid}_blend_func(vec4(0.0), new_color);`;
                         }
+
                         continue;
                     }
 
                     execution += `
-    instance_id = ${i};
-    stencilPasses = osd_stencil_texture(${i}, 0, v_texture_coords).r > 0.995;
-    vec3 attrs_${i} = u_shaderVariables[${i}];
-    opacity = attrs_${i}.x;
-    pixelSize = attrs_${i}.y;
-    zoom = attrs_${i}.z;`;
+    instance_id = ${slot};
+${getStencilPassCode(shaderLayer)}
+    vec3 attrs_${slot} = u_shaderVariables[${slot}];
+    opacity = attrs_${slot}.x;
+    pixelSize = attrs_${slot}.y;
+    zoom = attrs_${slot}.z;`;
 
-                    // To understand the code below: show & mask are basically same modes: they blend atop
-                    // of existing data. 'Show' just uses built-in alpha blending.
-                    // However, clip blends on the previous output only (and it can chain!).
-
-                    if (previousShaderLayer._mode !== "clip") {
+                    if (shaderLayer._mode !== "clip") {
                         execution += `${getRemainingBlending()}
-// ${previousShaderLayer.constructor.type()} - Blending
-new_color = compute_${previousShaderLayer.uid}();
+// ${shaderLayer.constructor.type()} - Blending
+new_color = compute_${shaderLayer.uid}();
 new_color.a = new_color.a * ${opacityModifier};`;
 
-                        remainingBlenForShaderID = previousShaderID;
+                        remainingBlendShader = shaderLayer;
                     } else {
                         execution += `
-// ${previousShaderLayer.constructor.type()} - Clipping
-clip_color = compute_${previousShaderLayer.uid}();
+// ${shaderLayer.constructor.type()} - Clipping
+clip_color = compute_${shaderLayer.uid}();
 clip_color.a = clip_color.a * ${opacityModifier};
-new_color = ${previousShaderLayer.uid}_blend_func(clip_color, new_color);`;
+new_color = ${shaderLayer.uid}_blend_func(clip_color, new_color);`;
                     }
-                } // end of for cycle
+                }
 
-                if (remainingBlenForShaderID) {
+                if (remainingBlendShader) {
                     execution += getRemainingBlending();
                 }
 
-                execution += "return combined_color;";
+                execution += "\nreturn combined_color;";
 
                 return execution;
             }

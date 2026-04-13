@@ -362,12 +362,10 @@
                     if (this.htmlHandler) {
                         this.htmlReset();
 
-                        for (const shaderId of this.getShaderLayerOrder()) {
-                            const shaderLayer = this._shaders[shaderId];
-                            const shaderConfig = shaderLayer.__shaderConfig;
+                        for (const shaderLayer of this.getFlatShaderLayers()) {
                             this.htmlHandler(
                                 shaderLayer,
-                                shaderConfig
+                                shaderLayer.__shaderConfig
                             );
                         }
 
@@ -439,7 +437,7 @@
                 type: "identity",
                 visible: 1,
                 fixed: false,
-                tiledImages: [0],
+                tiledImages: [],
                 params: {},
                 cache: {},
             };
@@ -516,6 +514,35 @@
          */
         getShaderLayerOrder() {
             return this._shadersOrder || Object.keys(this._shaders);
+        }
+
+        forEachShaderLayer(shaderMap = this._shaders, shaderOrder = this.getShaderLayerOrder(), callback, parentShader = null, depth = 0) {
+            if (!shaderMap || !shaderOrder || !callback) {
+                return;
+            }
+
+            for (const shaderId of shaderOrder) {
+                const shader = shaderMap[shaderId];
+                if (!shader) {
+                    continue;
+                }
+
+                callback(shader, shaderId, parentShader, depth);
+
+                if (shader.constructor.type() === "group" && shader.shaderLayers && shader.shaderLayerOrder) {
+                    this.forEachShaderLayer(shader.shaderLayers, shader.shaderLayerOrder, callback, shader, depth + 1);
+                }
+            }
+        }
+
+        getFlatShaderLayers(shaderMap = this._shaders, shaderOrder = this.getShaderLayerOrder()) {
+            const flat = [];
+
+            this.forEachShaderLayer(shaderMap, shaderOrder, shader => {
+                flat.push(shader);
+            });
+
+            return flat;
         }
 
         /**
