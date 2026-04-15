@@ -1,5 +1,6 @@
 (function($) {
-    $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
+
+$.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     /**
      * Create a WebGL 2.0 rendering implementation.
      * @param {OpenSeadragon.FlexRenderer} renderer
@@ -98,10 +99,32 @@
     }
 
     getBlendingFunction(name) {
+        const h = `
+float blendLum(vec3 c){return dot(c,vec3(.3,.59,.11));}
+float blendSat(vec3 c){return max(max(c.r,c.g),c.b)-min(min(c.r,c.g),c.b);}
+vec3 clipColor(vec3 c){
+    float l=blendLum(c),n=min(min(c.r,c.g),c.b),x=max(max(c.r,c.g),c.b);
+    if(n<0.) c=l+((c-l)*l)/(l-n);
+    if(x>1.) c=l+((c-l)*(1.-l))/(x-l);
+    return c;
+}
+vec3 setLum(vec3 c,float l){return clipColor(c+vec3(l-blendLum(c)));}
+vec3 setSat(vec3 c,float s){
+    float mn=min(min(c.r,c.g),c.b),mx=max(max(c.r,c.g),c.b);
+    if(mx<=mn) return vec3(0.);
+    if(c.r<=c.g&&c.g<=c.b) return vec3(0.,((c.g-mn)*s)/(mx-mn),s);
+    if(c.r<=c.b&&c.b<=c.g) return vec3(0.,s,((c.b-mn)*s)/(mx-mn));
+    if(c.g<=c.r&&c.r<=c.b) return vec3(((c.r-mn)*s)/(mx-mn),0.,s);
+    if(c.g<=c.b&&c.b<=c.r) return vec3(s,0.,((c.b-mn)*s)/(mx-mn));
+    if(c.b<=c.r&&c.r<=c.g) return vec3(((c.r-mn)*s)/(mx-mn),s,0.);
+    return vec3(s,((c.g-mn)*s)/(mx-mn),0.);
+}`;
+
         return {
             mask: `
-if (close(fg.a, 0.0))  return vec4(.0);
+if (close(fg.a, 0.0)) return vec4(.0);
 return bg;`,
+
             'source-over': `
 if (!stencilPasses) return bg;
 vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
@@ -183,14 +206,13 @@ return blendAlpha(fg, bg, clamp(rgb, 0.0, 1.0));`,
 
             'hard-light': `
 if (!stencilPasses) return bg;
-vec3 rgb = mix(2.0 * fg.rgb * bg.rgb, 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb), step(0.5, fg.rgb));
-return blendAlpha(fg, bg, rgb);`,
+vec3 rgb = mix(2.0 * fg.rgb * bg.rgb, 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb), step(vec3(0.5), fg.rgb));
+return blendAlpha(fg, bg, clamp(rgb, 0.0, 1.0));`,
 
             'soft-light': `
 if (!stencilPasses) return bg;
-vec3 rgb = (bg.rgb < 0.5)
-    ? (2.0 * fg.rgb * bg.rgb + fg.rgb * fg.rgb * (1.0 - 2.0 * bg.rgb))
-    : (sqrt(fg.rgb) * (2.0 * bg.rgb - 1.0) + 2.0 * fg.rgb * (1.0 - bg.rgb));
+vec3 d1=((16.0*bg.rgb-12.0)*bg.rgb+4.0)*bg.rgb,d2=sqrt(bg.rgb),D=mix(d1,d2,step(vec3(.25),bg.rgb));
+vec3 rgb=mix(bg.rgb-(1.0-2.0*fg.rgb)*bg.rgb*(1.0-bg.rgb),bg.rgb+(2.0*fg.rgb-1.0)*(D-bg.rgb),step(vec3(.5),fg.rgb));
 return blendAlpha(fg, bg, clamp(rgb, 0.0, 1.0));`,
 
             difference: `
@@ -200,6 +222,26 @@ return blendAlpha(fg, bg, abs(bg.rgb - fg.rgb));`,
             exclusion: `
 if (!stencilPasses) return bg;
 return blendAlpha(fg, bg, bg.rgb + fg.rgb - 2.0 * bg.rgb * fg.rgb);`,
+
+            hue: `
+${h}
+if (!stencilPasses) return bg;
+return blendAlpha(fg, bg, clamp(setLum(setSat(fg.rgb, blendSat(bg.rgb)), blendLum(bg.rgb)), 0.0, 1.0));`,
+
+            saturation: `
+${h}
+if (!stencilPasses) return bg;
+return blendAlpha(fg, bg, clamp(setLum(setSat(bg.rgb, blendSat(fg.rgb)), blendLum(bg.rgb)), 0.0, 1.0));`,
+
+            color: `
+${h}
+if (!stencilPasses) return bg;
+return blendAlpha(fg, bg, clamp(setLum(fg.rgb, blendLum(bg.rgb)), 0.0, 1.0));`,
+
+            luminosity: `
+${h}
+if (!stencilPasses) return bg;
+return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
         }[name];
     }
 };
@@ -543,6 +585,9 @@ ${getStencilPassCode(shaderLayer)}
 
         this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
         this.vao = gl.createVertexArray();
+
+        // TODO: is this refreshing logic necessary? if enableing this, delete the above refresh, not needed, will be done at use(...)
+        //  this._uploadedPackInfoVersion = -1;
     }
 
     /**
@@ -580,10 +625,12 @@ ${getStencilPassCode(shaderLayer)}
      * Use program. Arbitrary arguments.
      */
     use(renderOutput, renderArray, options) {
-        //todo flatten render array :/
         const gl = this.gl;
         gl.bindFramebuffer(gl.FRAMEBUFFER, options ? options.framebuffer : null);
         gl.bindVertexArray(this.vao);
+
+        // TODO: is this refreshing logic necessary?
+        // this._uploadTiledImageInfo();
 
         const shaderVariables = [];
         const instanceOffsets = [];
@@ -625,6 +672,38 @@ ${getStencilPassCode(shaderLayer)}
 
         return renderOutput;
     }
+
+    // TODO: is this refreshing logic necessary?
+    // _uploadTiledImageInfo() {
+    //     const renderer = this.context.renderer;
+    //     const packInfo = renderer.__flexPackInfo || {};
+    //     const version = packInfo.version || 0;
+    //
+    //     if (this._uploadedPackInfoVersion === version) {
+    //         return;
+    //     }
+    //
+    //     const gl = this.gl;
+    //     const layout = packInfo.layout || {};
+    //     const baseLayer = layout.baseLayer || [];
+    //     const packCount = layout.packCount || [];
+    //     const channelCount = packInfo.channelCount || [];
+    //
+    //     const maxTI = this._tiledImageCount;
+    //     const tiInfo = new Int32Array(maxTI * 3);
+    //
+    //     for (let i = 0; i < maxTI; i++) {
+    //         const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i;
+    //         const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
+    //
+    //         tiInfo[i * 3 + 0] = base;
+    //         tiInfo[i * 3 + 1] = pc;
+    //         tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
+    //     }
+    //
+    //     gl.uniform3iv(this._tiInfoLoc, tiInfo);
+    //     this._uploadedPackInfoVersion = version;
+    // }
 
     /**
      * Destroy program. No arguments.

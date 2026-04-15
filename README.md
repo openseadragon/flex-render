@@ -194,6 +194,11 @@ npm run dev
 ```
 and open http://localhost:8000/test/demo/flex-renderer-playground.html in your browser.
 
+Additional configurator debug pages are available under `test/demo/`:
+- `configurator-static-docs.html` renders the static shader/control documentation view.
+- `configurator-live-output.html` runs the interactive configurator and prints live config JSON.
+- `configurator-scheme.html` dumps the machine-readable configuration schema focused on usable JSON input: `ShaderConfig`, shader `params`, built-in `use_*` options, top-level and group `order` overrides, group `shaders`, typed UI-control config shapes, and reusable `controlTypedefs`.
+
 ## Roadmap
  - Bugfixing & getting ready for the first release
    - Fixing tests: inherited from OpenSeadragon, they expect incompatible behavior
@@ -204,7 +209,7 @@ and open http://localhost:8000/test/demo/flex-renderer-playground.html in your b
  - Add support for concave clipping polygons.
  - Adding support for better debugging & cropping
    - For now, only convex polygons are supported
- - Dynamic documentation that parses available shaders, controls, and shows what can be used where. 
+ - Dynamic documentation and configuration schema output that parse available shaders and controls and show what JSON can be used where. 
 
 #### What might be supported
  - Canvas2D proxy. People tend to use Canvas2D api to access the rendered data, which

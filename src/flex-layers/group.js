@@ -17,6 +17,23 @@
                 return "Group shader layers.";
             }
 
+            static docs() {
+                return {
+                    summary: "Composite shader that evaluates child shader layers in group order.",
+                    description: "Instantiates nested shader configurations from the group's shaders map, evaluates them in the configured order, and combines their outputs using each child shader's blend or clip mode.",
+                    kind: "shader",
+                    inputs: [],
+                    config: {
+                        shaders: "Map of child shader id to child ShaderConfig.",
+                        order: "Optional ordered list of child shader ids."
+                    },
+                    notes: [
+                        "The group shader itself does not declare renderer-native controls.",
+                        "Child shaders are initialized, loaded, drawn, and destroyed through the group."
+                    ]
+                };
+            }
+
             static sources() {
                 return [];
             }

@@ -25,6 +25,24 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "highlights edges at threshold values";
     }
 
+    static docs() {
+        return {
+            summary: "Edge-highlighting shader for one scalar input channel.",
+            description: "Detects threshold crossings in the four cardinal directions around each sample and renders edge and inner-edge colors based on neighborhood comparisons.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "1D data to detect edges on threshold value"
+            }],
+            controls: [
+                { name: "color", ui: "color", valueType: "vec3", default: "#fff700" },
+                { name: "threshold", ui: "range_input", valueType: "float", default: 50, min: 1, max: 100, step: 1 },
+                { name: "edgeThickness", ui: "range", valueType: "float", default: 1, min: 0.5, max: 3, step: 0.1 }
+            ]
+        };
+    }
+
     static sources() {
         return [{
             acceptsChannelCount: (x) => x === 1,

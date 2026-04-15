@@ -20,6 +20,15 @@
         return JSON.parse(JSON.stringify(value));
     }
 
+    function firstDefined(...values) {
+        for (const value of values) {
+            if (value !== undefined) {
+                return value;
+            }
+        }
+        return undefined;
+    }
+
     function escapeHtml(v) {
         return String(v || "")
             .replaceAll("&", "&amp;")
@@ -315,6 +324,8 @@
                 const sources = typeof Shader.sources === "function" ? (Shader.sources() || []) : [];
                 const controls = this._compileControlDescriptors(Shader);
                 const customParams = Shader.customParams || {};
+                const configNotes = this._compileSpecialConfigNotes(Shader);
+                const classDocs = this._getShaderClassDocs(Shader);
 
                 return {
                     type: Shader.type(),
@@ -330,14 +341,16 @@
                     customParams: Object.entries(customParams).map(([name, meta]) => ({
                         name,
                         usage: (meta && meta.usage) || ""
-                    }))
+                    })),
+                    configNotes,
+                    classDocs
                 };
             });
 
             const controls = this._compileAvailableControls();
 
             const model = {
-                version: 3,
+                version: 6,
                 generatedAt: new Date().toISOString(),
                 shaders,
                 controls
@@ -345,6 +358,63 @@
 
             this._docsModel = model;
             return model;
+        },
+
+        compileConfigSchemaModel() {
+            const controlTypedefs = this._compileControlTypedefs();
+            const shaders = $.FlexRenderer.ShaderMediator.availableShaders().map(Shader => {
+                const sources = typeof Shader.sources === "function" ? (Shader.sources() || []) : [];
+                return {
+                    type: Shader.type(),
+                    name: typeof Shader.name === "function" ? Shader.name() : Shader.type(),
+                    description: typeof Shader.description === "function" ? Shader.description() : "",
+                    rootConfig: this._compileShaderRootConfigSchema(Shader),
+                    params: this._compileShaderParamsSchema(Shader, sources),
+                    sources: sources.map((src, index) => ({
+                        index,
+                        description: src.description || "",
+                        acceptedChannelCounts: this._probeAcceptedChannelCounts(src)
+                    }))
+                };
+            });
+
+            return {
+                version: 1,
+                generatedAt: new Date().toISOString(),
+                rendererConfig: {
+                    type: "object",
+                    usage: "Renderer configuration snapshot with explicit shader order and shader definitions.",
+                    properties: [
+                        {
+                            key: "order",
+                            type: "string[]",
+                            required: false,
+                            usage: "Optional top-level render order override. When omitted, the renderer falls back to Object.keys(shaders).",
+                            overridesDefaultOrder: true,
+                            targets: "top-level",
+                            defaultBehavior: "Object.keys(shaders)"
+                        },
+                        {
+                            key: "shaders",
+                            type: "Object<string, ShaderConfig>",
+                            required: true,
+                            usage: "Map of shader id -> shader configuration object."
+                        }
+                    ]
+                },
+                shaderConfigBase: this._compileBaseShaderConfigSchema(),
+                controlTypedefs,
+                uiControls: this._compileControlSchemas(),
+                shaders
+            };
+        },
+
+        async compileConfigSchemaModelAsync() {
+            return this.compileConfigSchemaModel();
+        },
+
+        async compileDocsModelAsync() {
+            return this.compileDocsModel();
         },
 
         serializeDocs(mode = "json", model = this._docsModel || this.compileDocsModel()) {
@@ -628,10 +698,48 @@
                     name: ctrl.name,
                     glType: ctrl.type,
                     uiType: ctrl.uiControlType,
-                    supports: deepClone(ctrl.supports || {})
+                    supports: deepClone(ctrl.supports || {}),
+                    classDocs: this._getControlClassDocs(ctrl)
                 }));
             }
             return out;
+        },
+
+        _compileControlSchemas() {
+            const built = this._buildControls();
+            const out = {};
+            for (const [glType, controls] of Object.entries(built)) {
+                out[glType] = controls.map(ctrl => ({
+                    name: ctrl.name,
+                    glType: ctrl.type,
+                    uiType: ctrl.uiControlType,
+                    typedef: this._getControlTypedefId(ctrl),
+                    config: this._compileControlConfigShape(ctrl)
+                }));
+            }
+            return out;
+        },
+
+        _compileControlTypedefs() {
+            const built = this._buildControls();
+            const typedefs = {};
+
+            for (const controls of Object.values(built)) {
+                for (const control of controls) {
+                    const typedefId = this._getControlTypedefId(control);
+                    if (!typedefs[typedefId]) {
+                        typedefs[typedefId] = {
+                            id: typedefId,
+                            name: control.name,
+                            uiType: control.uiControlType,
+                            glType: control.type,
+                            config: this._compileControlConfigShape(control)
+                        };
+                    }
+                }
+            }
+
+            return typedefs;
         },
 
         _probeAcceptedChannelCounts(src) {
@@ -649,6 +757,357 @@
                 }
             }
             return accepted;
+        },
+
+        _compileBaseShaderConfigSchema() {
+            return {
+                type: "object",
+                usage: "Base JSON object accepted by renderer shader-layer configuration.",
+                properties: [
+                    {
+                        key: "id",
+                        type: "string",
+                        required: true,
+                        usage: "Unique shader identifier used by the renderer."
+                    },
+                    {
+                        key: "name",
+                        type: "string",
+                        required: false,
+                        usage: "Optional human-readable layer name."
+                    },
+                    {
+                        key: "type",
+                        type: "string",
+                        required: true,
+                        usage: "Registered shader type resolved through ShaderMediator."
+                    },
+                    {
+                        key: "visible",
+                        type: "number|boolean",
+                        required: false,
+                        usage: "Layer visibility flag. Renderer examples use 1 or 0."
+                    },
+                    {
+                        key: "fixed",
+                        type: "boolean",
+                        required: false,
+                        usage: "Renderer flag stored on ShaderConfig."
+                    },
+                    {
+                        key: "tiledImages",
+                        type: "number[]|OpenSeadragon.TiledImage[]",
+                        required: false,
+                        usage: "Data sources consumed by the shader. Entries are indexed by source position."
+                    },
+                    {
+                        key: "params",
+                        type: "object",
+                        required: false,
+                        usage: "Shader-specific settings, built-in use_* options, UI-control configs, and custom parameters."
+                    },
+                    {
+                        key: "_controls",
+                        type: "object",
+                        required: false,
+                        usage: "Renderer-managed control storage present on ShaderConfig."
+                    },
+                    {
+                        key: "cache",
+                        type: "object",
+                        required: false,
+                        usage: "Persistent runtime state used by controls and reset* helpers."
+                    }
+                ]
+            };
+        },
+
+        _compileShaderRootConfigSchema(Shader) {
+            const base = this._compileBaseShaderConfigSchema().properties.map(item => deepClone(item));
+            const byKey = new Map(base.map(item => [item.key, item]));
+
+            for (const note of this._compileSpecialConfigNotes(Shader)) {
+                byKey.set(note.key, {
+                    ...(byKey.get(note.key) || {}),
+                    key: note.key,
+                    type: note.kind || "special",
+                    required: false,
+                    usage: note.usage || ""
+                });
+            }
+
+            return {
+                type: "object",
+                properties: [...byKey.values()]
+            };
+        },
+
+        _compileShaderParamsSchema(Shader, sources = []) {
+            const defs = Shader.defaultControls || {};
+            const controls = this._compileControlDescriptors(Shader).map(control => ({
+                key: control.name,
+                kind: "ui-control",
+                usage: `Shader param for UI control '${control.name}'.`,
+                supportedUiTypes: control.supportedUiTypes,
+                defaultControlConfig: control.default !== null ? deepClone(control.default) : null,
+                requiredControlConfig: control.required !== null ? deepClone(control.required) : null,
+                supportedControlSchemas: this._expandSupportedUiSchemas(control.supportedUiTypes)
+            }));
+
+            const customParams = Object.entries(Shader.customParams || {}).map(([name, meta]) => ({
+                key: name,
+                kind: "custom-param",
+                usage: (meta && meta.usage) || "",
+                default: meta && meta.default !== undefined ? deepClone(meta.default) : null,
+                required: meta && meta.required !== undefined ? deepClone(meta.required) : null
+            }));
+
+            return {
+                type: "object",
+                usage: "Configuration object assigned to ShaderConfig.params.",
+                builtIn: [
+                    ...this._compileUseChannelSchemas(Shader, sources, defs),
+                    this._compileUseModeSchema(defs),
+                    this._compileUseBlendSchema(defs),
+                    ...this._compileUseFilterSchemas(defs)
+                ],
+                controls,
+                customParams
+            };
+        },
+
+        _compileUseChannelSchemas(_Shader, sources = [], defs = {}) {
+            return sources.flatMap((src, index) => {
+                const accepted = this._probeAcceptedChannelCounts(src);
+                const defaultControl = defs[`use_channel${index}`] || {};
+                const baseControl = defs[`use_channel_base${index}`] || {};
+
+                return [
+                    {
+                        key: `use_channel${index}`,
+                        kind: "built-in",
+                        type: "string",
+                        usage: "Channel pattern used for sampling this source. Accepts swizzles like 'r', 'rg', 'rgba' and inline base form 'N:pattern'.",
+                        acceptedChannelCounts: accepted,
+                        default: firstDefined(defaultControl.required, defaultControl.default, "r"),
+                        required: firstDefined(defaultControl.required, null)
+                    },
+                    {
+                        key: `use_channel_base${index}`,
+                        kind: "built-in",
+                        type: "number",
+                        usage: "Explicit flattened base-channel offset for this source. Overrides the optional N prefix from use_channel.",
+                        default: firstDefined(baseControl.required, baseControl.default, 0),
+                        required: firstDefined(baseControl.required, null)
+                    }
+                ];
+            });
+        },
+
+        _compileUseModeSchema(defs = {}) {
+            const spec = defs.use_mode || {};
+            return {
+                key: "use_mode",
+                kind: "built-in",
+                type: "string",
+                usage: "Rendering mode resolved by resetMode(). Supported values come from renderer WebGL context.",
+                allowedValues: ["show", "blend", "clip", "mask", "clip_mask"],
+                default: firstDefined(spec.required, spec.default, "show"),
+                required: firstDefined(spec.required, null)
+            };
+        },
+
+        _compileUseBlendSchema(defs = {}) {
+            const spec = defs.use_blend || {};
+            return {
+                key: "use_blend",
+                kind: "built-in",
+                type: "string",
+                usage: "Blend function used when the current use_mode applies blending.",
+                allowedValues: deepClone($.FlexRenderer.BLEND_MODE || []),
+                default: firstDefined(spec.required, spec.default, ($.FlexRenderer.BLEND_MODE || [])[0], null),
+                required: firstDefined(spec.required, null)
+            };
+        },
+
+        _compileUseFilterSchemas(defs = {}) {
+            const names = $.FlexRenderer.ShaderLayer.filterNames || {};
+            return Object.keys($.FlexRenderer.ShaderLayer.filters || {}).map(key => {
+                const spec = defs[key] || {};
+                const label = names[key] || key;
+                return {
+                    key,
+                    kind: "built-in",
+                    type: "number",
+                    usage: `${label} filter parameter applied by resetFilters().`,
+                    default: firstDefined(spec.required, spec.default, null),
+                    required: firstDefined(spec.required, null)
+                };
+            });
+        },
+
+        _expandSupportedUiSchemas(names = []) {
+            const built = this._buildControls();
+            const seen = new Set();
+            const out = [];
+
+            for (const controls of Object.values(built)) {
+                for (const control of controls) {
+                    if (!names.includes(control.name) || seen.has(control.name)) {
+                        continue;
+                    }
+                    seen.add(control.name);
+                    out.push({
+                        name: control.name,
+                        glType: control.type,
+                        uiType: control.uiControlType,
+                        typedef: this._getControlTypedefId(control),
+                        config: this._compileControlConfigShape(control)
+                    });
+                }
+            }
+
+            return out;
+        },
+
+        _getControlTypedefId(control) {
+            const uiType = control && control.uiControlType ? control.uiControlType : "unknown";
+            const glType = control && control.type ? control.type : "unknown";
+            return `control:${uiType}:${glType}`;
+        },
+
+        _compileControlConfigShape(control) {
+            const docs = this._getControlClassDocs(control);
+            const docParams = new Map(((docs && docs.parameters) || []).map(param => [param.name, param]));
+            const supports = deepClone(this._safeReadControlProp(control, "supports", {}) || {});
+            const supportsAll = deepClone(this._safeReadControlProp(control, "supportsAll", {}) || {});
+            const keys = [...new Set([
+                ...Object.keys(supports),
+                ...Object.keys(supportsAll),
+                ...docParams.keys()
+            ])];
+
+            const config = {};
+            for (const key of keys) {
+                config[key] = this._compileControlConfigPropertySchema(
+                    key,
+                    supports[key],
+                    supportsAll[key],
+                    docParams.get(key) || null
+                );
+            }
+            return config;
+        },
+
+        _safeReadControlProp(control, prop, fallback = undefined) {
+            if (!control) {
+                return fallback;
+            }
+            try {
+                const value = control[prop];
+                return value === undefined ? fallback : value;
+            } catch (_) {
+                return fallback;
+            }
+        },
+
+        _compileControlConfigPropertySchema(name, sampleValue, variantsValue, docParam) {
+            const schema = {
+                type: this._inferSchemaType(sampleValue, variantsValue, docParam)
+            };
+
+            if (sampleValue !== undefined) {
+                schema.default = deepClone(sampleValue);
+            } else if (docParam && docParam.default !== undefined) {
+                schema.default = deepClone(docParam.default);
+            }
+
+            if (variantsValue !== undefined) {
+                schema.examples = deepClone(Array.isArray(variantsValue) ? variantsValue : [variantsValue]);
+            }
+
+            if (docParam && docParam.usage) {
+                schema.usage = docParam.usage;
+            }
+
+            return schema;
+        },
+
+        _inferSchemaType(sampleValue, variantsValue, docParam) {
+            if (docParam && docParam.type) {
+                return docParam.type;
+            }
+
+            if (variantsValue !== undefined) {
+                return this._inferValueType(variantsValue);
+            }
+
+            return this._inferValueType(sampleValue);
+        },
+
+        _inferValueType(value) {
+            if (value === null) {
+                return "null";
+            }
+            if (Array.isArray(value)) {
+                if (value.length === 0) {
+                    return "array";
+                }
+                const itemTypes = [...new Set(value.map(item => this._inferValueType(item)))];
+                if (itemTypes.length === 1) {
+                    return `${itemTypes[0]}[]`;
+                }
+                return `array<${itemTypes.join("|")}>`;
+            }
+            if (typeof value === "string") {
+                return "string";
+            }
+            if (typeof value === "number") {
+                return "number";
+            }
+            if (typeof value === "boolean") {
+                return "boolean";
+            }
+            if (value && typeof value === "object") {
+                return "object";
+            }
+            return "unknown";
+        },
+
+        _compileSpecialConfigNotes(Shader) {
+            if (!Shader || typeof Shader.type !== "function") {
+                return [];
+            }
+
+            if (Shader.type() === "group") {
+                return [
+                    {
+                        key: "shaders",
+                        kind: "map",
+                        usage: "Map of child shader id -> ShaderConfig. This is the nested layer collection rendered by the group."
+                    },
+                    {
+                        key: "order",
+                        kind: "string[]",
+                        usage: "Optional child render order override inside the group. When omitted, the group falls back to Object.keys(shaders).",
+                        overridesDefaultOrder: true,
+                        targets: "group-children",
+                        defaultBehavior: "Object.keys(shaders)"
+                    },
+                    {
+                        key: "tiledImages",
+                        kind: "special",
+                        usage: "Unlike regular shader layers, the group shader does not usually consume tiled images directly. Child shaders define and use their own tiledImages."
+                    },
+                    {
+                        key: "controls",
+                        kind: "special",
+                        usage: "Renderer-native controls are created for child shaders. The group shader itself is mainly a container and blend/composition stage."
+                    }
+                ];
+            }
+
+            return [];
         },
 
         _serializeDocsText(model) {
@@ -686,10 +1145,149 @@
                     }
                 }
 
+                if (shader.classDocs && shader.classDocs.summary) {
+                    out.push(`Class docs: ${shader.classDocs.summary}`);
+                }
+
+                if (shader.configNotes && shader.configNotes.length) {
+                    out.push(`Configuration notes:`);
+                    for (const note of shader.configNotes) {
+                        out.push(`- ${note.key}${note.kind ? ` (${note.kind})` : ""}: ${note.usage}`);
+                    }
+                }
+
                 out.push("");
             }
 
             return out.join("\n");
+        },
+
+        _normalizeClassDocs(rawDocs, fallback = {}) {
+            if (!rawDocs) {
+                return null;
+            }
+
+            if (typeof rawDocs === "function") {
+                rawDocs = rawDocs(fallback);
+            }
+
+            if (!rawDocs) {
+                return null;
+            }
+
+            if (typeof rawDocs === "string") {
+                return {
+                    summary: rawDocs,
+                    description: rawDocs
+                };
+            }
+
+            if (typeof rawDocs !== "object") {
+                return null;
+            }
+
+            const normalized = deepClone(rawDocs);
+            if (!normalized.summary && normalized.description) {
+                normalized.summary = String(normalized.description).split(/\n\s*\n/)[0].trim();
+            }
+            if (!normalized.description && normalized.summary) {
+                normalized.description = normalized.summary;
+            }
+
+            if (fallback.type && normalized.type === undefined) {
+                normalized.type = fallback.type;
+            }
+            if (fallback.name && normalized.name === undefined) {
+                normalized.name = fallback.name;
+            }
+            if (fallback.kind && normalized.kind === undefined) {
+                normalized.kind = fallback.kind;
+            }
+
+            return normalized;
+        },
+
+        _extractDocsProvider(subject, fallback = {}) {
+            if (!subject) {
+                return null;
+            }
+
+            if (typeof subject.docs === "function") {
+                return this._normalizeClassDocs(subject.docs(subject, fallback), fallback);
+            }
+
+            if (typeof subject.docs === "object" || typeof subject.docs === "string") {
+                return this._normalizeClassDocs(subject.docs, fallback);
+            }
+
+            if (typeof subject.getDocs === "function") {
+                return this._normalizeClassDocs(subject.getDocs(subject, fallback), fallback);
+            }
+
+            return null;
+        },
+
+        _getShaderClassDocs(Shader) {
+            if (!Shader || typeof Shader.type !== "function") {
+                return null;
+            }
+
+            const fallback = {
+                kind: "shader",
+                type: Shader.type(),
+                name: typeof Shader.name === "function" ? Shader.name() : Shader.type()
+            };
+
+            const explicit = this._extractDocsProvider(Shader, fallback);
+            if (explicit) {
+                return explicit;
+            }
+
+            const description = typeof Shader.description === "function" ? Shader.description() : "";
+            return this._normalizeClassDocs({
+                ...fallback,
+                summary: description || `${fallback.name} shader`,
+                description: description || `${fallback.name} shader.`,
+                api: {
+                    hasSources: typeof Shader.sources === "function",
+                    hasDefaultControls: !!Shader.defaultControls,
+                    hasCustomParams: !!Shader.customParams
+                }
+            }, fallback);
+        },
+
+        _getControlClassDocs(control) {
+            if (!control) {
+                return null;
+            }
+
+            const fallback = {
+                kind: "ui-control",
+                type: control.uiControlType || control.name,
+                name: control.name || control.uiControlType
+            };
+
+            if (control.component) {
+                const docs = this._extractDocsProvider(control.component, fallback);
+                if (docs) {
+                    return docs;
+                }
+            }
+
+            const explicit = this._extractDocsProvider(control.constructor, fallback);
+            if (explicit) {
+                return explicit;
+            }
+
+            return this._normalizeClassDocs({
+                ...fallback,
+                summary: `${fallback.name || fallback.type} UI control`,
+                description: `${fallback.name || fallback.type} UI control for GLSL type ${control.type}.`,
+                api: {
+                    glType: control.type,
+                    supports: deepClone(control.supports || {})
+                }
+            }, fallback);
         },
 
         _renderDefaultShaderDoc(shader) {
@@ -738,6 +1336,24 @@
                         <td><code>${escapeHtml(ctrl.name)}</code></td>
                         <td>${escapeHtml(ctrl.supportedUiTypes.join(", "))}</td>
                         <td><pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(ctrl.default || ctrl.required || {}, null, 2))}</pre></td>
+                    </tr>`).join("")}
+                </tbody>
+            </table>
+        </div>
+    </div>` : ""}
+
+    ${shader.configNotes && shader.configNotes.length ? `
+    <div class="mt-4">
+        <div class="mb-2 font-semibold">Configuration notes</div>
+        <div class="overflow-x-auto">
+            <table class="table table-sm">
+                <thead><tr><th>Key</th><th>Kind</th><th>Usage</th></tr></thead>
+                <tbody>
+                    ${shader.configNotes.map(note => `
+                    <tr>
+                        <td><code>${escapeHtml(note.key)}</code></td>
+                        <td>${escapeHtml(note.kind || "")}</td>
+                        <td>${escapeHtml(note.usage || "")}</td>
                     </tr>`).join("")}
                 </tbody>
             </table>

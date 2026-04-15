@@ -30,16 +30,10 @@ Canonical semantic event for persistence, sync, autosave, undo/redo, and history
 
 ```js
 {
-    reason: "control-change" |
-    "mode-change" |
-    "filter-change" |
-    "channel-change" |
-    "external-config" |
-    "configure-tiled-image",
-
-        snapshot: {
+    reason: "control-change" | "mode-change" | "filter-change" | "channel-change" | "external-config" | "configure-tiled-image",
+    snapshot: {
         order: ["shaderA", "shaderB"],
-            shaders: {
+        shaders: {
             shaderA: {
                 id: "shaderA",
                     name: "Layer A",
@@ -55,20 +49,20 @@ Canonical semantic event for persistence, sync, autosave, undo/redo, and history
 
     // present when applicable
     shaderId: "shaderA",
-        shaderType: "identity",
+    shaderType: "identity",
 
-        // control-change
-        controlName: "opacity",
-        controlVariableName: "default",
-        encodedValue: "0.5",
-        value: 0.5,
+    // control-change
+    controlName: "opacity",
+    controlVariableName: "default",
+    encodedValue: "0.5",
+    value: 0.5,
 
-        // mode-change
-        mode: "show",
-        blend: "source-over",
+    // mode-change
+    mode: "show",
+    blend: "source-over",
 
-        // external-config
-        external: true
+    // external-config
+    external: true
 }
 ```
 

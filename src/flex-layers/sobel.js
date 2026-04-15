@@ -16,6 +16,22 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "sobel edge detector";
     }
 
+    static docs() {
+        return {
+            summary: "Sobel edge detector for RGB input.",
+            description: "Samples a 3x3 neighborhood, applies Sobel X and Y kernels independently to RGB data, and returns grayscale edge strength with alpha fixed to 1.0.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [3],
+                description: "Data to detect edges on"
+            }],
+            controls: [
+                { name: "use_channel0", default: "rgb" }
+            ]
+        };
+    }
+
     static sources() {
         return [{
             acceptsChannelCount: (x) => x === 3,

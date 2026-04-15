@@ -3,9 +3,7 @@
  * Bi-colors shader
  * data reference must contain one index to the data to render using bipolar heatmap strategy
  *
- * $_GET/$_POST expected parameters:
- *  index - unique number in the compiled shader
- * $_GET/$_POST supported parameters:
+ * supported parameters:
  *  colorHigh - color to fill-in areas with high values (-->255), url encoded '#ffffff' format or digits only 'ffffff', default "#ff0000"
  *  colorLow - color to fill-in areas with low values (-->0), url encoded '#ffffff' format or digits only 'ffffff', default "#7cfc00"
  *  ctrlColor - whether to allow color modification, true or false, default true
@@ -28,6 +26,24 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
     static description() {
         return "values are of two categories, smallest considered in the middle";
+    }
+
+    static docs() {
+        return {
+            summary: "Diverging heatmap shader for a single scalar input channel.",
+            description: "Treats values around 0.5 as insignificant and maps values below and above 0.5 to separate colors. Opacity is derived from the distance from the midpoint after filtering and threshold comparison.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "1D diverging data encoded in opacity"
+            }],
+            controls: [
+                { name: "colorHigh", ui: "color", valueType: "vec3", default: "#ff1000" },
+                { name: "colorLow", ui: "color", valueType: "vec3", default: "#01ff00" },
+                { name: "threshold", ui: "range_input", valueType: "float", default: 1, min: 1, max: 100, step: 1 }
+            ]
+        };
     }
 
     static sources() {

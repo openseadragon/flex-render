@@ -1144,19 +1144,41 @@
             drawLabels = true,
             background = '#111'
         } = {}) {
-            const colorLayers = renderOutput.textureDepth;
-            const stencilLayers = renderOutput.stencilDepth;
+            const colorLayers = renderOutput.textureDepth || 0;
+            const stencilLayers = renderOutput.stencilDepth || 0;
 
-            const cols = 2;
-            const rows = colorLayers;
-            const width = Math.floor(this.canvas.width);
-            const height = Math.floor(this.canvas.height);
-            const cellW = Math.floor(width * scale);
-            const cellH = Math.floor(height * scale);
+            const packLayout = (this.__flexPackInfo && this.__flexPackInfo.layout) || {};
+            const baseLayer = Array.isArray(packLayout.baseLayer) ? packLayout.baseLayer : [];
+            const packCount = Array.isArray(packLayout.packCount) ? packLayout.packCount : [];
+
+            const tiCount = Math.max(stencilLayers, baseLayer.length);
+            const rawRows = Math.max(colorLayers, stencilLayers);
+            const mappedRows = tiCount;
+
+            const width = Math.max(1, Math.floor(this.canvas.width));
+            const height = Math.max(1, Math.floor(this.canvas.height));
+            const cellW = Math.max(1, Math.floor(width * scale));
+            const cellH = Math.max(1, Math.floor(height * scale));
+
+            const sectionGap = 28;
+            const headerH = drawLabels ? 18 : 0;
+
+            // 2 columns for raw section, 2 columns for TI-mapped section
+            const cols = 4;
             const totalW = pad + cols * (cellW + pad);
-            const totalH = pad + rows * (cellH + pad) + (drawLabels ? 18 : 0);
+            const totalH =
+                pad +
+                headerH +
+                rawRows * (cellH + pad) +
+                sectionGap +
+                headerH +
+                mappedRows * (cellH + pad);
 
-            const dbg = this._openDebugWindowFromUserGesture(totalW, totalH, 'Offscreen Layers (Texture | Stencil)');
+            const dbg = this._openDebugWindowFromUserGesture(
+                totalW,
+                totalH,
+                'Offscreen Layers (Raw + TiledImage Mapping)'
+            );
             if (!dbg) {
                 console.warn('Could not open debug window');
                 return;
@@ -1166,24 +1188,6 @@
             const isGL2 = (gl instanceof WebGL2RenderingContext) || this.webGLVersion === "2.0";
 
             const ctx = dbg.__debugCtx;
-            ctx.fillStyle = background;
-            ctx.fillRect(0, 0, totalW, totalH);
-            ctx.imageSmoothingEnabled = false;
-
-            // Optional headers
-            if (drawLabels) {
-                ctx.fillStyle = '#ddd';
-                ctx.font = '12px system-ui';
-                ctx.textBaseline = 'top';
-                const yLbl = 2;
-                const x0 = pad;
-                const x1 = pad + (cellW + pad);
-                ctx.fillText('Texture', x0, yLbl);
-                ctx.fillText('Stencil', x1, yLbl);
-            }
-
-            // Prepare a tiny staging canvas so we can draw the pixels into 2D easily
-            // and then scale when drawing to the popup.
             if (!this._debugStage) {
                 this._debugStage = document.createElement('canvas');
             }
@@ -1192,11 +1196,21 @@
             stage.height = height;
             const stageCtx = stage.getContext('2d', { willReadFrequently: true });
 
-            // One reusable buffer & ImageData to avoid reallocation per tile
+            const outputCanvas = ctx.canvas;
+            if (outputCanvas.width !== totalW || outputCanvas.height !== totalH) {
+                outputCanvas.width = totalW;
+                outputCanvas.height = totalH;
+            }
+            ctx.clearRect(0, 0, totalW, totalH);
+            ctx.fillStyle = background;
+            ctx.fillRect(0, 0, totalW, totalH);
+            ctx.imageSmoothingEnabled = false;
+
             let pixels = this._readbackBuffer;
             if (!pixels || pixels.length !== width * height * 4) {
                 pixels = this._readbackBuffer = new Uint8ClampedArray(width * height * 4);
             }
+
             if (!this._imageData || this._imageData.width !== width || this._imageData.height !== height) {
                 this._imageData = new ImageData(width, height);
             }
@@ -1214,59 +1228,117 @@
                 gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, 0, layerIndex);
             };
 
-            // Iterate rows: each row = {texture i, stencil i}
-            for (let i = 0; i < colorLayers; i++) {
-                // ---- texture ----
-                if (isGL2 && renderOutput.texture /* texture array */) {
-                    attachLayer(renderOutput.texture, i);
-                } else {
-                    console.error('No valid texture binding for "texture" at index', i);
-                    continue;
+            const drawEmptyCell = (x, y, text = '—') => {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(x, y, cellW, cellH);
+                ctx.strokeStyle = '#333';
+                ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
+
+                ctx.fillStyle = '#666';
+                ctx.font = '12px system-ui';
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = 'center';
+                ctx.fillText(text, x + cellW / 2, y + cellH / 2);
+                ctx.textAlign = 'start';
+            };
+
+            const drawLayerCell = (texArray, layerIndex, x, y, kind) => {
+                if (!isGL2 || !texArray || layerIndex < 0) {
+                    drawEmptyCell(x, y, 'n/a');
+                    return;
                 }
 
+                attachLayer(texArray, layerIndex);
+
                 if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-                    console.error('Framebuffer incomplete for texture layer', i);
-                    continue;
+                    console.error(`Framebuffer incomplete for ${kind} layer`, layerIndex);
+                    drawEmptyCell(x, y, 'fb err');
+                    return;
                 }
+
                 gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
                 imageData.data.set(pixels);
                 stageCtx.putImageData(imageData, 0, 0);
-                const colTex = 0;
-                const xTex = pad + colTex * (cellW + pad);
-                const yBase = (drawLabels ? 18 : 0);
-                const yRow = yBase + pad + i * (cellH + pad);
-                ctx.drawImage(stage, 0, 0, width, height, xTex, yRow, cellW, cellH);
+                ctx.drawImage(stage, 0, 0, width, height, x, y, cellW, cellH);
+            };
 
-                // ---- stencil ----
-                if (isGL2 && renderOutput.stencil /* texture array */ && stencilLayers > 0) {
-                    const stencilLayer = Math.min(i, stencilLayers - 1);
-                    attachLayer(renderOutput.stencil, stencilLayer);
+            const rawHeaderY = pad;
+            const rawY0 = rawHeaderY + headerH;
+            const mappedHeaderY = rawY0 + rawRows * (cellH + pad) + sectionGap;
+            const mappedY0 = mappedHeaderY + headerH;
+
+            const xRawTex = pad;
+            const xRawStencil = pad + (cellW + pad);
+            const xTiColor = pad + 2 * (cellW + pad);
+            const xTiStencil = pad + 3 * (cellW + pad);
+
+            if (drawLabels) {
+                ctx.fillStyle = '#ddd';
+                ctx.font = '12px system-ui';
+                ctx.textBaseline = 'top';
+
+                ctx.fillText('Raw texture layers', xRawTex, rawHeaderY);
+                ctx.fillText('Raw stencil layers', xRawStencil, rawHeaderY);
+                ctx.fillText('TI mapped color', xTiColor, mappedHeaderY);
+                ctx.fillText('TI stencil', xTiStencil, mappedHeaderY);
+            }
+
+            // --- RAW PHYSICAL LAYERS ---
+            for (let i = 0; i < rawRows; i++) {
+                const y = rawY0 + i * (cellH + pad);
+
+                if (i < colorLayers) {
+                    drawLayerCell(renderOutput.texture, i, xRawTex, y, 'raw-texture');
                 } else {
-                    console.error('No valid texture binding for "stencil" at index', i);
-                    continue;
+                    drawEmptyCell(xRawTex, y);
                 }
 
-                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-                    console.error('Framebuffer incomplete for stencil layer', i);
-                    continue;
+                if (i < stencilLayers) {
+                    drawLayerCell(renderOutput.stencil, i, xRawStencil, y, 'raw-stencil');
+                } else {
+                    drawEmptyCell(xRawStencil, y);
                 }
-                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-                imageData.data.set(pixels);
-                stageCtx.putImageData(imageData, 0, 0);
-                const colSt = 1;
-                const xSt = pad + colSt * (cellW + pad);
-                ctx.drawImage(stage, 0, 0, width, height, xSt, yRow, cellW, cellH);
 
-                // optional row label
                 if (drawLabels) {
                     ctx.fillStyle = '#aaa';
                     ctx.font = '12px system-ui';
                     ctx.textBaseline = 'top';
-                    ctx.fillText(`#${i}`, pad, yRow - 14);
+                    ctx.fillText(`#${i}`, xRawTex, y - 14);
                 }
             }
 
-            // tidy
+            // --- LOGICAL TILED-IMAGE MAPPING ---
+            for (let ti = 0; ti < mappedRows; ti++) {
+                const y = mappedY0 + ti * (cellH + pad);
+
+                const mappedColorLayer =
+                    typeof baseLayer[ti] === 'number' ? baseLayer[ti] : ti;
+                const mappedPackCount =
+                    typeof packCount[ti] === 'number' ? packCount[ti] : 1;
+
+                if (mappedColorLayer >= 0 && mappedColorLayer < colorLayers) {
+                    drawLayerCell(renderOutput.texture, mappedColorLayer, xTiColor, y, 'ti-color');
+                } else {
+                    drawEmptyCell(xTiColor, y, 'unmapped');
+                }
+
+                if (ti < stencilLayers) {
+                    drawLayerCell(renderOutput.stencil, ti, xTiStencil, y, 'ti-stencil');
+                } else {
+                    drawEmptyCell(xTiStencil, y, '—');
+                }
+
+                if (drawLabels) {
+                    ctx.fillStyle = '#aaa';
+                    ctx.font = '12px system-ui';
+                    ctx.textBaseline = 'top';
+                    const label =
+                        `TI #${ti} → tex L${mappedColorLayer}` +
+                        (mappedPackCount > 1 ? ` (${mappedPackCount} packs)` : '');
+                    ctx.fillText(label, xTiColor, y - 14);
+                }
+            }
+
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         }
 

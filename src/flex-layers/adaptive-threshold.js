@@ -14,6 +14,27 @@
             return "Local adaptive thresholding with mean or Gaussian-weighted neighborhood.";
         }
 
+        static docs() {
+            return {
+                summary: "Adaptive threshold shader for a single scalar input channel.",
+                description: "Computes a local statistic over a square neighborhood and compares the center sample against localStat - C. The neighborhood may be uniformly weighted or approximately Gaussian weighted.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [1],
+                    description: "Single scalar channel / derived scalar field"
+                }],
+                controls: [
+                    { name: "block_size", ui: "range_input", valueType: "float", default: 5, min: 3, max: 11, step: 2 },
+                    { name: "c_value", ui: "range_input", valueType: "float", default: 0.03, min: -0.5, max: 0.5, step: 0.001 },
+                    { name: "gaussian", ui: "bool", valueType: "bool", default: false },
+                    { name: "invert", ui: "bool", valueType: "bool", default: false },
+                    { name: "fg_color", ui: "color", valueType: "vec3", default: "#ffffff" },
+                    { name: "bg_color", ui: "color", valueType: "vec3", default: "#000000" }
+                ]
+            };
+        }
+
         static sources() {
             return [{
                 acceptsChannelCount: (n) => n === 1,

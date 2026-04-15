@@ -65,6 +65,42 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "internally use different shader to render one of chosen elements";
     }
 
+        static docs() {
+        return {
+            summary: "Wrapper shader that delegates rendering to another shader over a selectable series.",
+            description: "Builds an internal renderer selected by seriesRenderer and switches the active data reference through the timeline control. Timeline changes trigger refetch with the selected series item.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: null,
+                description: "render selected data source by underlying shader"
+            }],
+            customParams: [
+                {
+                    name: "seriesRenderer",
+                    default: "identity",
+                    description: "Shader type used internally for rendering the selected series element."
+                },
+                {
+                    name: "series",
+                    description: "Array of data indexes addressable through the timeline control."
+                }
+            ],
+            controls: [
+                {
+                    name: "timeline",
+                    ui: "range_input",
+                    valueType: "float",
+                    required: { type: "range_input" }
+                }
+            ],
+            notes: [
+                "Opacity is disabled on this wrapper shader.",
+                "The delegated renderer contributes fragment shader definition, execution, GL loading, drawing, and HTML controls."
+            ]
+        };
+    }
+
     static get customParams() {
         return {
             seriesRenderer: {

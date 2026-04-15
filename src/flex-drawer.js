@@ -635,7 +635,8 @@
                 }
 
                 const packCount = tiledImage.__flexPackCount || 1;
-                const baseLayer = (tiledImage.__flexBaseLayer || 0);
+                const baseLayer =
+                    (typeof tiledImage.__flexBaseLayer === "number") ? tiledImage.__flexBaseLayer : tiledImageIndex;
 
                 for (let packIndex = 0; packIndex < packCount; packIndex++) {
                     TI_PAYLOAD.push({
@@ -806,6 +807,10 @@
                 packCount: packCount,
                 totalLayers: total
             };
+
+            // TODO: is this refreshing logic necessary?
+            //  this.renderer.__flexPackInfo.version =
+            //     (this.renderer.__flexPackInfo.version || 0) + 1;
         }
 
         /**
@@ -947,6 +952,8 @@
                 const tileInfo = this._buildGpuTextureTileInfo(data, tile, tiledImage, gl);
 
                 if (this._packLayoutDirty) {
+                    // TODO: is this refreshing logic necessary?
+                    //  this._refreshPackLayoutNow();
                     this._packLayoutDirty = false;
                     this._requestRebuild();
                 }
@@ -956,6 +963,11 @@
 
             return this._buildBitmapTileInfo(data, tile, tiledImage, gl);
         }
+
+        // _refreshPackLayoutNow() {
+        //     this._updatePackLayout();
+        //     this._packLayoutDirty = false;
+        // }
 
         /**
          * Compute normalized tile texture coordinates (UVs) in source image space,

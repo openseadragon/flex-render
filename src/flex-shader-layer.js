@@ -191,6 +191,17 @@
         }
 
         /**
+         * Optional machine-readable documentation descriptor.
+         * External shader registrations can override this as either:
+         *  - static docs() { return {...}; }
+         *  - static docs = {...}
+         * @returns {object|null}
+         */
+        static docs() {
+            return null;
+        }
+
+        /**
          * Declare the object for channel settings. One for each data source (NOT USED, ALWAYS RETURNS ARRAY OF ONE OBJECT; for backward compatibility the array is returned)
          * @returns {[channelSettings]}
          */

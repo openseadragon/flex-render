@@ -28,6 +28,23 @@
             return "Render one selected TIFF channel with a custom color.";
         }
 
+        static docs() {
+            return {
+                summary: "Single-channel shader that colors one logical scalar channel.",
+                description: "Samples one selected scalar channel and multiplies that scalar value by a configurable RGB color. Alpha is set to the sampled scalar value.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [1],
+                    description: "Multi-channel TIFF/GeoTIFF (scalar channels)"
+                }],
+                controls: [
+                    { name: "use_channel0", default: "r", description: "Single-channel swizzle used for sampling." },
+                    { name: "color", ui: "color", valueType: "vec3", default: "#ff00ff" }
+                ]
+            };
+        }
+
         // One source: multi-channel TIFF/GeoTIFF scalar channels
         static sources() {
             return [{
