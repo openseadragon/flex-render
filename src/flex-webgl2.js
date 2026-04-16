@@ -1645,7 +1645,14 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
     _tryPlaceRect(layerIndex, w, h) {
         const W = this.layerWidth;
         const H = this.layerHeight;
-        const st = this._layerState[layerIndex];
+        let st = this._layerState[layerIndex];
+
+        if (!st) {
+            // todo it happens that the _layerState is empty but plaing called! this is a bug
+            $.console.error('TextureAtlas2DArray._tryPlaceRect: invalid layerIndex');
+            this._createTexture(W, H, this.layers);
+            st = this._layerState[layerIndex];
+        }
 
         // try existing shelves
         for (const shelf of st.shelves) {
