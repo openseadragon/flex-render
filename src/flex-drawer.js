@@ -115,13 +115,21 @@
             // If custom rendering used, use arbitrary external configuration
             this._configuredExternally = true;
             this.renderer.deleteShaders();
+
             for (let shaderID in shaders) {
-                $.console.log("Registering shader", shaderID, shaders[shaderID], this._isNavigatorDrawer);
                 let config = shaders[shaderID];
+                $.console.log("Creating shader layer", shaderID, config, this._isNavigatorDrawer);
                 this.renderer.createShaderLayer(shaderID, config, this.options.copyShaderConfig);
             }
+
             shaderOrder = shaderOrder || Object.keys(shaders);
             this.renderer.setShaderLayerOrder(shaderOrder);
+
+            this.renderer.notifyVisualizationChanged({
+                reason: "external-config",
+                external: true
+            });
+
             return this._requestRebuild(0);
         }
 
@@ -172,6 +180,11 @@
                     $.console.warn("Could not find corresponding tiled image for the navigator!");
                 }
             }
+
+            this.renderer.notifyVisualizationChanged({
+                reason: "configure-tiled-image",
+                shaderId: shader.id
+            });
 
             return shader;
         }
@@ -622,7 +635,8 @@
                 }
 
                 const packCount = tiledImage.__flexPackCount || 1;
-                const baseLayer = (tiledImage.__flexBaseLayer || 0);
+                const baseLayer =
+                    (typeof tiledImage.__flexBaseLayer === "number") ? tiledImage.__flexBaseLayer : tiledImageIndex;
 
                 for (let packIndex = 0; packIndex < packCount; packIndex++) {
                     TI_PAYLOAD.push({
@@ -647,28 +661,41 @@
         }
 
         /**
+         * Collects shader layer variables (opacity, pixelSize, zoom) into one flat array,
+         * group shader layers are followed by their child layers in the order specified by the group
+         * @param shaders
+         * @param shaderOrder
+         * @param viewport
+         * @returns {*[]}
+         * @private
+         */
+        _collectShaderUniforms(shaders, shaderOrder, viewport) {
+            const sources = [];
+            const flatShaders = this.renderer.getFlatShaderLayers(shaders, shaderOrder);
+
+            for (const shader of flatShaders) {
+                const config = shader.getConfig();
+                const hasSources = Array.isArray(config.tiledImages) && config.tiledImages.length > 0;
+                const tiledImage = hasSources ? this.viewer.world.getItemAt(config.tiledImages[0]) : null;
+
+                sources.push({
+                    zoom: viewport.zoom,
+                    pixelSize: tiledImage ? this._tiledImageViewportToImageZoom(tiledImage, viewport.zoom) : 1,
+                    opacity: tiledImage ? tiledImage.getOpacity() : 1,
+                    shader: shader,
+                });
+            }
+
+            return sources;
+        }
+
+        /**
          * During the second-pass draw from the off-screen textures into the rendering canvas,
          * applying the image-processing operations and rendering customizations.
          * @param {Object} viewport has bounds, center, rotation, zoom
          */
         _drawTwoPassSecond(viewport) {
-            const sources = [];
-            const shaders = this.renderer.getAllShaders();
-
-            for (let shaderID of this.renderer.getShaderLayerOrder()) {
-                const shader = shaders[shaderID];
-                const config = shader.getConfig();
-
-                // TODO Here we could do some nicer logics, RN we just treat TI0 as a source of truth
-                // also when rendering offscreen, the tiled image might be detached
-                const tiledImage = this.viewer.world.getItemAt(config.tiledImages[0]);
-                sources.push({
-                    zoom: viewport.zoom,
-                    pixelSize: tiledImage ? this._tiledImageViewportToImageZoom(tiledImage, viewport.zoom) : 1,
-                    opacity: tiledImage ? tiledImage.getOpacity() : 1,
-                    shader: shader
-                });
-            }
+            const sources = this._collectShaderUniforms(this.renderer.getAllShaders(), this.renderer.getShaderLayerOrder(), viewport);
 
             if (!sources.length) {
                 this.viewer.forceRedraw();
@@ -780,6 +807,10 @@
                 packCount: packCount,
                 totalLayers: total
             };
+
+            // TODO: is this refreshing logic necessary?
+            //  this.renderer.__flexPackInfo.version =
+            //     (this.renderer.__flexPackInfo.version || 0) + 1;
         }
 
         /**
@@ -792,7 +823,21 @@
         /**
          * @returns {Boolean} true if canvas and webgl are supported
          */
-        static isSupported() {
+        static isSupported(options = {}) {
+            const rendererClass = $.FlexRenderer;
+            if (rendererClass && typeof rendererClass.ensureRuntimeSupport === "function") {
+                try {
+                    return !!rendererClass.ensureRuntimeSupport({
+                        webGLPreferredVersion: options.webGLPreferredVersion || "2.0",
+                        force: options.force === true,
+                        throwOnFailure: false,
+                        debug: !!options.debug,
+                    }).ok;
+                } catch (e) {
+                    return false;
+                }
+            }
+
             let canvasElement = document.createElement('canvas');
             let webglContext = $.isFunction(canvasElement.getContext) &&
                 canvasElement.getContext('webgl');
@@ -907,6 +952,8 @@
                 const tileInfo = this._buildGpuTextureTileInfo(data, tile, tiledImage, gl);
 
                 if (this._packLayoutDirty) {
+                    // TODO: is this refreshing logic necessary?
+                    //  this._refreshPackLayoutNow();
                     this._packLayoutDirty = false;
                     this._requestRebuild();
                 }
@@ -916,6 +963,11 @@
 
             return this._buildBitmapTileInfo(data, tile, tiledImage, gl);
         }
+
+        // _refreshPackLayoutNow() {
+        //     this._updatePackLayout();
+        //     this._packLayoutDirty = false;
+        // }
 
         /**
          * Compute normalized tile texture coordinates (UVs) in source image space,

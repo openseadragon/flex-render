@@ -133,6 +133,7 @@ $.FlexRenderer.UIControls = class {
         decode: function(fromValue) {...}, //parse value obtained from HTML controls into something
                                                 gl[glUniformFunName()](...) can pass to GPU
         glType: //what's the type of this parameter wrt. GLSL: int? vec3?
+        docs: object|function // optional machine-readable docs descriptor
      * @param type the identifier under which is this control used: lookup made against params.type
      * @param uiElement the object to register, fulfilling the above-described contract
      */
@@ -165,6 +166,7 @@ $.FlexRenderer.UIControls = class {
     /**
      * Register class as a UI control
      * @param {string} type unique control name / identifier
+     *  The class may optionally expose machine-readable docs as either static docs() or static docs = {...}.
      * @param {OpenSeadragon.FlexRenderer.UIControls.IControl} cls to register, implementation class of the controls
      */
     static registerClass(type, cls) {
@@ -208,7 +210,21 @@ step="${params.step}" type="number" id="${uniqueId}">`;
             return name;
         },
         glType: "float",
-        uiType: "number"
+        uiType: "number",
+        docs: {
+            summary: "Numeric float input control.",
+            description: "Renders an HTML number input, decodes to float, normalizes values into the configured min/max range, and exposes a float GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number" },
+                { name: "min", type: "number" },
+                { name: "max", type: "number" },
+                { name: "step", type: "number" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "float"
+        }
     },
 
     range: {
@@ -233,7 +249,21 @@ class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}"
             return name;
         },
         glType: "float",
-        uiType: "range"
+        uiType: "range",
+        docs: {
+            summary: "Slider control for float uniforms.",
+            description: "Renders an HTML range input, decodes to float, normalizes values into the configured min/max range, and exposes a float GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number" },
+                { name: "min", type: "number" },
+                { name: "max", type: "number" },
+                { name: "step", type: "number" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "float"
+        }
     },
 
     color: {
@@ -266,7 +296,18 @@ class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}"
             return name;
         },
         glType: "vec3",
-        uiType: "color"
+        uiType: "color",
+        docs: {
+            summary: "RGB color picker control.",
+            description: "Renders an HTML color input, decodes a hex color string into three normalized float components, and exposes a vec3 GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "string" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "vec3"
+        }
     },
 
     bool: {
@@ -293,7 +334,18 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
             return name;
         },
         glType: "bool",
-        uiType: "bool"
+        uiType: "bool",
+        docs: {
+            summary: "Boolean toggle control.",
+            description: "Renders an HTML checkbox, decodes the checked state into 0 or 1, and exposes a bool-compatible GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "boolean" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "bool"
+        }
     },
 
     select: {
@@ -349,7 +401,19 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
             return name;
         },
         glType: "int",
-        uiType: "select_int"
+        uiType: "select_int",
+        docs: {
+            summary: "Integer select control.",
+            description: "Renders an HTML select element, decodes the selected option value into an integer, and exposes an int GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number" },
+                { name: "options", type: "array|object" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "int"
+        }
     }
 };
 
@@ -361,7 +425,18 @@ $.FlexRenderer.UIControls._impls = {
 /**
  * @interface
  */
-$.FlexRenderer.UIControls.IControl = class {
+$.FlexRenderer.UIControls.IControl = class IControl {
+
+    /**
+     * Optional machine-readable documentation descriptor.
+     * External control registrations can override this as either:
+     *  - static docs() { return {...}; }
+     *  - static docs = {...}
+     * @returns {object|null}
+     */
+    static docs() {
+        return null;
+    }
 
     /**
      * Sets common properties needed to create the controls:
@@ -525,7 +600,8 @@ $.FlexRenderer.UIControls.IControl = class {
     /**
      * TODO: improve overall setter API
      * Allows to set the control value programatically.
-     * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate())
+     * Does not trigger canvas re-rednreing, must be done manually (e.g. control.owner.invalidate()).
+     * You should raise the 'change' event when the value is changed.
      * @param encodedValue any value the given control can support, encoded
      *  (e.g. as the control acts on the GUI - for input number of
      *    values between 5 and 42, the value can be '6' or 6 or 6.15
@@ -707,6 +783,7 @@ $.FlexRenderer.UIControls.IControl = class {
      *  - most controls support "default" event - change of default value
      *  - see specific control implementation to see what events are fired (Advanced Slider fires "breaks" and "mask" for instance)
      * @param {function} clbck(rawValue, encodedValue, context) call once change occurs, context is the control instance
+     * TODO: use openseadragon event system directly here too
      */
     on(event, clbck) {
         this.__onchange[event] = clbck; //only one possible event -> rewrite?
@@ -740,6 +817,16 @@ $.FlexRenderer.UIControls.IControl = class {
         if (typeof this.__onchange[event] === "function") {
             this.__onchange[event](value, encodedValue, context);
         }
+
+        this.owner.webglContext.renderer.notifyVisualizationChanged({
+            reason: "control-change",
+            shaderId: this.owner.id,
+            shaderType: this.owner.constructor.type(),
+            controlName: this.name,
+            controlVariableName: event,  // we use here event for names of the control vars like 'default', 'breaks'
+            encodedValue: this.encodedValue,
+            value: this.value
+        });
     }
 
     /**
@@ -908,6 +995,23 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
 };
 
 $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Compound float control composed of a range slider and number input.",
+            description: "Creates two synchronized SimpleUIControl instances, one range and one number input, and uses the range control for GLSL definition and loading.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number" },
+                { name: "min", type: "number" },
+                { name: "max", type: "number" },
+                { name: "step", type: "number" },
+                { name: "interactive", type: "boolean" },
+                { name: "title", type: "string" }
+            ],
+            glType: "float"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this._c1 = new $.FlexRenderer.UIControls.SimpleUIControl(

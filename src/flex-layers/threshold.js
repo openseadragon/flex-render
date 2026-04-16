@@ -14,6 +14,39 @@
             return "Global threshold preview with OpenCV-like threshold modes.";
         }
 
+        static docs() {
+            return {
+                summary: "Global threshold shader for a single scalar input channel.",
+                description: "Implements five threshold modes analogous to binary, binary inverse, truncation, to-zero, and to-zero inverse. Binary modes can optionally be colorized with foreground and background colors.",
+                kind: "shader",
+                inputs: [{
+                    index: 0,
+                    acceptedChannelCounts: [1],
+                    description: "Single scalar channel / derived scalar field"
+                }],
+                controls: [
+                    { name: "threshold", ui: "range", valueType: "float", default: 0.5, min: 0, max: 1, step: 0.005 },
+                    { name: "max_value", ui: "range", valueType: "float", default: 1, min: 0, max: 1, step: 0.005 },
+                    {
+                        name: "version",
+                        ui: "select",
+                        valueType: "int",
+                        default: 0,
+                        options: [
+                            { value: 0, label: "Binary" },
+                            { value: 1, label: "Binary inv" },
+                            { value: 2, label: "Trunc" },
+                            { value: 3, label: "To zero" },
+                            { value: 4, label: "To zero inv" }
+                        ]
+                    },
+                    { name: "colorize_binary", ui: "bool", valueType: "bool", default: true },
+                    { name: "fg_color", ui: "color", valueType: "vec3", default: "#ffffff" },
+                    { name: "bg_color", ui: "color", valueType: "vec3", default: "#000000" }
+                ]
+            };
+        }
+
         static sources() {
             return [{
                 acceptsChannelCount: (n) => n === 1,

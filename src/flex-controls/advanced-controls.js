@@ -5,6 +5,23 @@
  * @class OpenSeadragon.FlexRenderer.UIControls.ColorMap
  */
 $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Named colormap control producing vec3 samples from a float ratio.",
+            description: "Loads a palette by name from the configured scheme group, uploads palette colors and step boundaries as uniforms, and samples colors through generated GLSL helper code. Supports discrete and continuous rendering modes.",
+            kind: "ui-control",
+            parameters: [
+                { name: "steps", type: "number|array", default: 3 },
+                { name: "default", type: "string", default: "YlOrRd" },
+                { name: "mode", type: "string", default: "sequential" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Colormap" },
+                { name: "continuous", type: "boolean", default: false }
+            ],
+            glType: "vec3"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this.prepare();
@@ -245,6 +262,23 @@ $.FlexRenderer.UIControls.registerClass("colormap", $.FlexRenderer.UIControls.Co
 
 
 $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexRenderer.UIControls.ColorMap {
+    static docs() {
+        return {
+            summary: "Editable custom colormap control.",
+            description: "Variant of the colormap control that uses user-provided color arrays instead of named palettes and expands the maximum sample count to 32.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "array", default: ["#000000", "#888888", "#ffffff"] },
+                { name: "steps", type: "number|array", default: 3 },
+                { name: "mode", type: "string", default: "sequential" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Colormap:" },
+                { name: "continuous", type: "boolean", default: false }
+            ],
+            glType: "vec3"
+        };
+    }
+
     prepare() {
         this.MAX_SAMPLES = 32;
         this.GLOBAL_GLSL_KEY = 'custom_colormap';
@@ -344,6 +378,29 @@ style="width: 60%;"></span></div>`;
  * @class OpenSeadragon.FlexRenderer.UIControls.AdvancedSlider
  */
 $.FlexRenderer.UIControls.AdvancedSlider = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Multi-breakpoint slider with per-interval mask values.",
+            description: "Stores ordered breakpoints and interval masks, uploads both arrays to GLSL, and samples either the active mask or a masked interval ratio through generated helper code. Interactive mode depends on noUiSlider being present.",
+            kind: "ui-control",
+            parameters: [
+                { name: "breaks", type: "array", default: [0.2, 0.8] },
+                { name: "mask", type: "array", default: [1, 0, 1] },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "inverted", type: "boolean", default: true },
+                { name: "maskOnly", type: "boolean", default: true },
+                { name: "toggleMask", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Threshold" },
+                { name: "min", type: "number", default: 0 },
+                { name: "max", type: "number", default: 1 },
+                { name: "minGap", type: "number", default: 0.05 },
+                { name: "step", type: "null|number", default: null },
+                { name: "pips", type: "object" }
+            ],
+            glType: "float"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this.MAX_SLIDERS = 12;
@@ -623,6 +680,21 @@ $.FlexRenderer.UIControls.registerClass("advanced_slider", $.FlexRenderer.UICont
  * @class WebGLModule.UIControls.TextArea
  */
 $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Textarea control for free-form text values.",
+            description: "Renders a textarea, stores string values, and does not define or upload any GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "string", default: "" },
+                { name: "placeholder", type: "string", default: "" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Text" }
+            ],
+            glType: "text"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
     }
@@ -702,6 +774,20 @@ $.FlexRenderer.UIControls.registerClass("text_area", $.FlexRenderer.UIControls.T
  * @class OpenSeadragon.FlexRenderer.UIControls.Button
  */
 $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Button control that counts clicks.",
+            description: "Renders a button, increments an internal counter on click, and does not define or upload any GLSL uniform.",
+            kind: "ui-control",
+            parameters: [
+                { name: "default", type: "number", default: 0 },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "title", type: "string", default: "Button" }
+            ],
+            glType: "action"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
     }
@@ -774,6 +860,20 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
 $.FlexRenderer.UIControls.registerClass("button", $.FlexRenderer.UIControls.Button);
 
 $.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.UIControls.IControl {
+    static docs() {
+        return {
+            summary: "Atlas-backed image sampling control.",
+            description: "Stores an integer texture id for the second-pass atlas, optionally allows adding PNG images through a file input, and samples atlas textures when given vec2 texture coordinates.",
+            kind: "ui-control",
+            parameters: [
+                { name: "title", type: "string", default: "Images" },
+                { name: "interactive", type: "boolean", default: true },
+                { name: "default", type: "number", default: -1 }
+            ],
+            glType: "vec4"
+        };
+    }
+
     constructor(owner, name, webGLVariableName, params) {
         super(owner, name, webGLVariableName);
         this.atlas = owner.webglContext.secondAtlas;

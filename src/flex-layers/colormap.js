@@ -31,6 +31,46 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "data values encoded in color scale";
     }
 
+    static docs() {
+        return {
+            summary: "Colormap shader for one scalar channel.",
+            description: "Samples a scalar value, maps it through a colormap control, and uses an advanced slider control as the visibility mask. The optional connect control synchronizes colormap step boundaries with slider breaks when a colormap control is active.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "1D data mapped to color map"
+            }],
+            controls: [
+                {
+                    name: "color",
+                    ui: "colormap",
+                    valueType: "vec3",
+                    default: {
+                        default: "Viridis",
+                        steps: 3,
+                        mode: "sequential",
+                        continuous: false
+                    }
+                },
+                {
+                    name: "threshold",
+                    ui: "advanced_slider",
+                    valueType: "float",
+                    default: {
+                        default: [0.25, 0.75],
+                        mask: [1, 0, 1]
+                    },
+                    required: {
+                        type: "advanced_slider",
+                        inverted: false
+                    }
+                },
+                { name: "connect", ui: "bool", valueType: "bool", default: false }
+            ]
+        };
+    }
+
     static sources() {
         return [{
             acceptsChannelCount: (x) => x === 1,

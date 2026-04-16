@@ -24,6 +24,22 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "shows the data AS-IS";
     }
 
+    static docs() {
+        return {
+            summary: "Identity shader for four-channel input.",
+            description: "Samples the input texture directly and returns the sampled RGBA value unchanged.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [4],
+                description: "4d texture to render AS-IS"
+            }],
+            controls: [
+                { name: "use_channel0", required: "rgba", description: "Required RGBA swizzle for direct passthrough sampling." }
+            ]
+        };
+    }
+
     static sources() {
         return [{
             acceptsChannelCount: (x) => x === 4,

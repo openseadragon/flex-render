@@ -15,6 +15,23 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "use a texture via texture atlas";
     }
 
+    static docs() {
+        return {
+            summary: "Texture compositing shader using the second-pass atlas.",
+            description: "Samples the primary RGBA input and a texture selected by the image control, then blends them with blendAlpha using the minimum RGB of both samples as the blend mask.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [4],
+                description: "first pass colors"
+            }],
+            controls: [
+                { name: "use_channel0", default: "rgba" },
+                { name: "texture", ui: "image", valueType: "vec4", default: { type: "image" } }
+            ]
+        };
+    }
+
     static sources() {
         return [
             {

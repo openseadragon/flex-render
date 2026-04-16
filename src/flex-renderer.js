@@ -152,7 +152,7 @@
             const namespace = $.FlexRenderer;
             for (let property in namespace) {
                 const context = namespace[ property ],
-                    proto = context.prototype;
+                    proto = context && context.prototype;
                 if (proto && proto instanceof namespace.WebGLImplementation &&
                     $.isFunction( proto.getVersion ) && proto.getVersion.call( context ) === version) {
                         return context;
@@ -362,14 +362,17 @@
                     if (this.htmlHandler) {
                         this.htmlReset();
 
-                        for (const shaderId of this.getShaderLayerOrder()) {
-                            const shaderLayer = this._shaders[shaderId];
-                            const shaderConfig = shaderLayer.__shaderConfig;
-                            this.htmlHandler(
-                                shaderLayer,
-                                shaderConfig
-                            );
-                        }
+                        this.forEachShaderLayerWithContext(
+                            this._shaders,
+                            this.getShaderLayerOrder(),
+                            (shaderLayer, shaderId, shaderConfig, htmlContext) => {
+                                this.htmlHandler(
+                                    shaderLayer,
+                                    shaderConfig,
+                                    htmlContext
+                                );
+                            }
+                        );
 
                         this.raiseEvent('html-controls-created', {
                             name: name,
@@ -416,7 +419,7 @@
         }
 
         /**
-         * Create and initialize new ShaderLayer instantion and its controls.
+         * Create and initialize new ShaderLayer instance and its controls.
          * @param id
          * @param {ShaderConfig} shaderConfig object bound to a concrete ShaderLayer instance
          * @param {boolean} [copyConfig=false] if true, deep copy of the config is used to avoid modification of the parameter
@@ -439,7 +442,7 @@
                 type: "identity",
                 visible: 1,
                 fixed: false,
-                tiledImages: [0],
+                tiledImages: [],
                 params: {},
                 cache: {},
             };
@@ -518,6 +521,94 @@
             return this._shadersOrder || Object.keys(this._shaders);
         }
 
+        forEachShaderLayer(shaderMap = this._shaders, shaderOrder = this.getShaderLayerOrder(), callback, parentShader = null, depth = 0) {
+            if (!shaderMap || !shaderOrder || !callback) {
+                return;
+            }
+
+            for (const shaderId of shaderOrder) {
+                const shader = shaderMap[shaderId];
+                if (!shader) {
+                    continue;
+                }
+
+                callback(shader, shaderId, parentShader, depth);
+
+                if (shader.constructor.type() === "group" && shader.shaderLayers && shader.shaderLayerOrder) {
+                    this.forEachShaderLayer(shader.shaderLayers, shader.shaderLayerOrder, callback, shader, depth + 1);
+                }
+            }
+        }
+
+        getFlatShaderLayers(shaderMap = this._shaders, shaderOrder = this.getShaderLayerOrder()) {
+            const flat = [];
+
+            this.forEachShaderLayer(shaderMap, shaderOrder, shader => {
+                flat.push(shader);
+            });
+
+            return flat;
+        }
+
+        forEachShaderLayerWithContext(
+            shaderMap = this._shaders,
+            shaderOrder = this.getShaderLayerOrder(),
+            callback,
+            parentContext = null
+        ) {
+            if (!shaderMap || !shaderOrder || !callback) {
+                return;
+            }
+
+            const depth = parentContext ? parentContext.depth + 1 : 0;
+
+            for (let index = 0; index < shaderOrder.length; index++) {
+                const shaderId = shaderOrder[index];
+                const shaderLayer = shaderMap[shaderId];
+                if (!shaderLayer) {
+                    continue;
+                }
+
+                const shaderConfig = shaderLayer.__shaderConfig || shaderLayer.getConfig();
+                const path = parentContext ? parentContext.path.concat([shaderId]) : [shaderId];
+                const hasChildren = !!(
+                    shaderLayer.constructor.type() === "group" &&
+                    shaderLayer.shaderLayers &&
+                    shaderLayer.shaderLayerOrder &&
+                    shaderLayer.shaderLayerOrder.length
+                );
+
+                const htmlContext = {
+                    depth: depth,
+                    index: index,
+                    path: path,
+                    pathString: path.join("/"),
+                    isGroupChild: !!parentContext,
+                    parentShader: parentContext ? parentContext.shaderLayer : null,
+                    parentConfig: parentContext ? parentContext.shaderConfig : null,
+                    parentShaderId: parentContext ? parentContext.shaderId : null,
+                    hasChildren: hasChildren,
+                };
+
+                callback(shaderLayer, shaderId, shaderConfig, htmlContext);
+
+                if (hasChildren) {
+                    this.forEachShaderLayerWithContext(
+                        shaderLayer.shaderLayers,
+                        shaderLayer.shaderLayerOrder,
+                        callback,
+                        {
+                            depth: depth,
+                            path: path,
+                            shaderLayer: shaderLayer,
+                            shaderConfig: shaderConfig,
+                            shaderId: shaderId,
+                        }
+                    );
+                }
+            }
+        }
+
         /**
          * Remove ShaderLayer instantion and its controls.
          * @param {string} id shader id
@@ -561,6 +652,51 @@
             }
         }
 
+        /**
+         * Build a stable JSON-safe snapshot of the current visualization state.
+         * Includes shader order and full shader configs, including params and cache.
+         * Runtime/private fields are filtered out using FlexRenderer.jsonReplacer.
+         *
+         * @returns {{
+         *   order: string[],
+         *   shaders: Object<string, ShaderConfig>
+         * }}
+         */
+        getVisualizationSnapshot() {
+            const snapshot = {
+                order: this.getShaderLayerOrder().slice(),
+                shaders: {}
+            };
+
+            for (const [shaderId, shader] of Object.entries(this.getAllShaders())) {
+                snapshot.shaders[shaderId] = JSON.parse(
+                    JSON.stringify(shader.getConfig(), $.FlexRenderer.jsonReplacer)
+                );
+            }
+
+            return snapshot;
+        }
+
+        /**
+         * Alias that makes intent explicit when used by application code.
+         * @returns {{order: string[], shaders: Object<string, ShaderConfig>}}
+         */
+        exportVisualization() {
+            return this.getVisualizationSnapshot();
+        }
+
+        /**
+         * Notify observers that visualization state changed.
+         * This is the canonical event to listen to.
+         *
+         * @param {object} payload
+         */
+        notifyVisualizationChanged(payload = {}) {
+            this.raiseEvent('visualization-change', $.extend(true, {
+                snapshot: this.getVisualizationSnapshot()
+            }, payload));
+        }
+
         destroy() {
             this.htmlReset();
             this.deleteShaders();
@@ -582,6 +718,167 @@
                 }
             }
             return key;
+        }
+
+        static _buildSelfTestColorData(width, height, rgba) {
+            const out = new Uint8Array(width * height * 4);
+            for (let i = 0; i < width * height; i++) {
+                const offset = i * 4;
+                out[offset] = rgba[0];
+                out[offset + 1] = rgba[1];
+                out[offset + 2] = rgba[2];
+                out[offset + 3] = rgba[3];
+            }
+            return out;
+        }
+
+        static _createSelfTestTextureArray(gl, width, height, depth, pixels, internalFormat = null) {
+            const texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, internalFormat || gl.RGBA8, width, height, depth);
+            gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, width, height, depth, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+            return texture;
+        }
+
+        static runSelfTest({
+            width = 2,
+            height = 2,
+            tolerance = 8,
+            webGLPreferredVersion = "2.0",
+            debug = false,
+        } = {}) {
+            let renderer = null;
+            let colorTexture = null;
+            let stencilTexture = null;
+            const testedAt = Date.now();
+            const expected = [67, 255, 100, 255];
+
+            try {
+                // TODO! instantiated test could be later used to run rendering itself, i.e. drawer.supports() consumes the instance
+                renderer = new $.FlexRenderer({
+                    uniqueId: "selftest_renderer",
+                    webGLPreferredVersion,
+                    redrawCallback: () => {},
+                    refetchCallback: () => {},
+                    debug: !!debug,
+                    interactive: false,
+                    backgroundColor: '#00000000',
+                    canvasOptions: {
+                        stencil: true
+                    }
+                });
+
+                const shaderId = 'selftest_layer';
+                renderer.createShaderLayer(shaderId, {
+                    id: shaderId,
+                    name: 'Self test',
+                    type: 'identity',
+                    visible: 1,
+                    fixed: false,
+                    tiledImages: [0],
+                    params: {},
+                    cache: {}
+                }, true);
+                renderer.setShaderLayerOrder([shaderId]);
+                renderer.setDimensions(0, 0, width, height, 1, 1);
+                renderer.registerProgram(null, renderer.webglContext.secondPassProgramKey);
+
+                const gl = renderer.gl;
+                const colorPixels = $.FlexRenderer._buildSelfTestColorData(width, height, expected);
+                const stencilPixels = $.FlexRenderer._buildSelfTestColorData(width, height, [255, 0, 0, 255]);
+                colorTexture = $.FlexRenderer._createSelfTestTextureArray(gl, width, height, 1, colorPixels);
+                stencilTexture = $.FlexRenderer._createSelfTestTextureArray(gl, width, height, 1, stencilPixels);
+
+                renderer.__firstPassResult = {
+                    texture: colorTexture,
+                    stencil: stencilTexture,
+                    textureDepth: 1,
+                    stencilDepth: 1,
+                };
+
+                renderer.secondPassProcessData([{
+                    zoom: 1,
+                    pixelSize: 1,
+                    opacity: 1,
+                    shader: renderer.getShaderLayer(shaderId),
+                }]);
+                gl.finish();
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+                const pixels = new Uint8Array(width * height * 4);
+                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+                for (let i = 0; i < width * height; i++) {
+                    const offset = i * 4;
+                    for (let c = 0; c < 4; c++) {
+                        if (Math.abs(pixels[offset + c] - expected[c]) > tolerance) {
+                            throw new Error(
+                                `Renderer self-test pixel mismatch at index ${i}: expected [${expected.join(', ')}], got [${Array.from(pixels.slice(offset, offset + 4)).join(', ')}].`
+                            );
+                        }
+                    }
+                }
+
+                return {
+                    ok: true,
+                    testedAt,
+                    width,
+                    height,
+                    tolerance,
+                    webGLPreferredVersion,
+                    webglVersion: renderer.webglVersion,
+                };
+            } catch (error) {
+                return {
+                    ok: false,
+                    testedAt,
+                    width,
+                    height,
+                    tolerance,
+                    webGLPreferredVersion,
+                    error: error && error.message ? error.message : String(error),
+                };
+            } finally {
+                if (renderer && renderer.gl) {
+                    const gl = renderer.gl;
+                    if (colorTexture) {
+                        gl.deleteTexture(colorTexture);
+                    }
+                    if (stencilTexture) {
+                        gl.deleteTexture(stencilTexture);
+                    }
+                }
+                if (renderer) {
+                    try {
+                        renderer.destroy();
+                    } catch (e) {
+                        $.console.warn('FlexRenderer self-test cleanup failed.', e);
+                    }
+                }
+            }
+        }
+
+        static ensureRuntimeSupport(options = {}) {
+            const useCache = options.force !== true;
+            if (useCache && $.FlexRenderer.__runtimeSupportCache) {
+                const cached = $.FlexRenderer.__runtimeSupportCache;
+                if (!cached.ok && options.throwOnFailure !== false) {
+                    throw new Error(cached.error || 'FlexRenderer runtime support test failed.');
+                }
+                return cached;
+            }
+
+            const result = $.FlexRenderer.runSelfTest(options);
+            $.FlexRenderer.__runtimeSupportCache = result;
+            if (!result.ok && options.throwOnFailure !== false) {
+                throw new Error(result.error || 'FlexRenderer runtime support test failed.');
+            }
+            return result;
         }
 
         // Todo below are debug and other utilities hardcoded for WebGL2. In case of other engines support, these methods
@@ -847,19 +1144,41 @@
             drawLabels = true,
             background = '#111'
         } = {}) {
-            const colorLayers = renderOutput.textureDepth;
-            const stencilLayers = renderOutput.stencilDepth;
+            const colorLayers = renderOutput.textureDepth || 0;
+            const stencilLayers = renderOutput.stencilDepth || 0;
 
-            const cols = 2;
-            const rows = colorLayers;
-            const width = Math.floor(this.canvas.width);
-            const height = Math.floor(this.canvas.height);
-            const cellW = Math.floor(width * scale);
-            const cellH = Math.floor(height * scale);
+            const packLayout = (this.__flexPackInfo && this.__flexPackInfo.layout) || {};
+            const baseLayer = Array.isArray(packLayout.baseLayer) ? packLayout.baseLayer : [];
+            const packCount = Array.isArray(packLayout.packCount) ? packLayout.packCount : [];
+
+            const tiCount = Math.max(stencilLayers, baseLayer.length);
+            const rawRows = Math.max(colorLayers, stencilLayers);
+            const mappedRows = tiCount;
+
+            const width = Math.max(1, Math.floor(this.canvas.width));
+            const height = Math.max(1, Math.floor(this.canvas.height));
+            const cellW = Math.max(1, Math.floor(width * scale));
+            const cellH = Math.max(1, Math.floor(height * scale));
+
+            const sectionGap = 28;
+            const headerH = drawLabels ? 18 : 0;
+
+            // 2 columns for raw section, 2 columns for TI-mapped section
+            const cols = 4;
             const totalW = pad + cols * (cellW + pad);
-            const totalH = pad + rows * (cellH + pad) + (drawLabels ? 18 : 0);
+            const totalH =
+                pad +
+                headerH +
+                rawRows * (cellH + pad) +
+                sectionGap +
+                headerH +
+                mappedRows * (cellH + pad);
 
-            const dbg = this._openDebugWindowFromUserGesture(totalW, totalH, 'Offscreen Layers (Texture | Stencil)');
+            const dbg = this._openDebugWindowFromUserGesture(
+                totalW,
+                totalH,
+                'Offscreen Layers (Raw + TiledImage Mapping)'
+            );
             if (!dbg) {
                 console.warn('Could not open debug window');
                 return;
@@ -869,24 +1188,6 @@
             const isGL2 = (gl instanceof WebGL2RenderingContext) || this.webGLVersion === "2.0";
 
             const ctx = dbg.__debugCtx;
-            ctx.fillStyle = background;
-            ctx.fillRect(0, 0, totalW, totalH);
-            ctx.imageSmoothingEnabled = false;
-
-            // Optional headers
-            if (drawLabels) {
-                ctx.fillStyle = '#ddd';
-                ctx.font = '12px system-ui';
-                ctx.textBaseline = 'top';
-                const yLbl = 2;
-                const x0 = pad;
-                const x1 = pad + (cellW + pad);
-                ctx.fillText('Texture', x0, yLbl);
-                ctx.fillText('Stencil', x1, yLbl);
-            }
-
-            // Prepare a tiny staging canvas so we can draw the pixels into 2D easily
-            // and then scale when drawing to the popup.
             if (!this._debugStage) {
                 this._debugStage = document.createElement('canvas');
             }
@@ -895,11 +1196,21 @@
             stage.height = height;
             const stageCtx = stage.getContext('2d', { willReadFrequently: true });
 
-            // One reusable buffer & ImageData to avoid reallocation per tile
+            const outputCanvas = ctx.canvas;
+            if (outputCanvas.width !== totalW || outputCanvas.height !== totalH) {
+                outputCanvas.width = totalW;
+                outputCanvas.height = totalH;
+            }
+            ctx.clearRect(0, 0, totalW, totalH);
+            ctx.fillStyle = background;
+            ctx.fillRect(0, 0, totalW, totalH);
+            ctx.imageSmoothingEnabled = false;
+
             let pixels = this._readbackBuffer;
             if (!pixels || pixels.length !== width * height * 4) {
                 pixels = this._readbackBuffer = new Uint8ClampedArray(width * height * 4);
             }
+
             if (!this._imageData || this._imageData.width !== width || this._imageData.height !== height) {
                 this._imageData = new ImageData(width, height);
             }
@@ -917,59 +1228,117 @@
                 gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, 0, layerIndex);
             };
 
-            // Iterate rows: each row = {texture i, stencil i}
-            for (let i = 0; i < colorLayers; i++) {
-                // ---- texture ----
-                if (isGL2 && renderOutput.texture /* texture array */) {
-                    attachLayer(renderOutput.texture, i);
-                } else {
-                    console.error('No valid texture binding for "texture" at index', i);
-                    continue;
+            const drawEmptyCell = (x, y, text = '—') => {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(x, y, cellW, cellH);
+                ctx.strokeStyle = '#333';
+                ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1);
+
+                ctx.fillStyle = '#666';
+                ctx.font = '12px system-ui';
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = 'center';
+                ctx.fillText(text, x + cellW / 2, y + cellH / 2);
+                ctx.textAlign = 'start';
+            };
+
+            const drawLayerCell = (texArray, layerIndex, x, y, kind) => {
+                if (!isGL2 || !texArray || layerIndex < 0) {
+                    drawEmptyCell(x, y, 'n/a');
+                    return;
                 }
 
+                attachLayer(texArray, layerIndex);
+
                 if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-                    console.error('Framebuffer incomplete for texture layer', i);
-                    continue;
+                    console.error(`Framebuffer incomplete for ${kind} layer`, layerIndex);
+                    drawEmptyCell(x, y, 'fb err');
+                    return;
                 }
+
                 gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
                 imageData.data.set(pixels);
                 stageCtx.putImageData(imageData, 0, 0);
-                const colTex = 0;
-                const xTex = pad + colTex * (cellW + pad);
-                const yBase = (drawLabels ? 18 : 0);
-                const yRow = yBase + pad + i * (cellH + pad);
-                ctx.drawImage(stage, 0, 0, width, height, xTex, yRow, cellW, cellH);
+                ctx.drawImage(stage, 0, 0, width, height, x, y, cellW, cellH);
+            };
 
-                // ---- stencil ----
-                if (isGL2 && renderOutput.stencil /* texture array */ && stencilLayers > 0) {
-                    const stencilLayer = Math.min(i, stencilLayers - 1);
-                    attachLayer(renderOutput.stencil, stencilLayer);
+            const rawHeaderY = pad;
+            const rawY0 = rawHeaderY + headerH;
+            const mappedHeaderY = rawY0 + rawRows * (cellH + pad) + sectionGap;
+            const mappedY0 = mappedHeaderY + headerH;
+
+            const xRawTex = pad;
+            const xRawStencil = pad + (cellW + pad);
+            const xTiColor = pad + 2 * (cellW + pad);
+            const xTiStencil = pad + 3 * (cellW + pad);
+
+            if (drawLabels) {
+                ctx.fillStyle = '#ddd';
+                ctx.font = '12px system-ui';
+                ctx.textBaseline = 'top';
+
+                ctx.fillText('Raw texture layers', xRawTex, rawHeaderY);
+                ctx.fillText('Raw stencil layers', xRawStencil, rawHeaderY);
+                ctx.fillText('TI mapped color', xTiColor, mappedHeaderY);
+                ctx.fillText('TI stencil', xTiStencil, mappedHeaderY);
+            }
+
+            // --- RAW PHYSICAL LAYERS ---
+            for (let i = 0; i < rawRows; i++) {
+                const y = rawY0 + i * (cellH + pad);
+
+                if (i < colorLayers) {
+                    drawLayerCell(renderOutput.texture, i, xRawTex, y, 'raw-texture');
                 } else {
-                    console.error('No valid texture binding for "stencil" at index', i);
-                    continue;
+                    drawEmptyCell(xRawTex, y);
                 }
 
-                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-                    console.error('Framebuffer incomplete for stencil layer', i);
-                    continue;
+                if (i < stencilLayers) {
+                    drawLayerCell(renderOutput.stencil, i, xRawStencil, y, 'raw-stencil');
+                } else {
+                    drawEmptyCell(xRawStencil, y);
                 }
-                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-                imageData.data.set(pixels);
-                stageCtx.putImageData(imageData, 0, 0);
-                const colSt = 1;
-                const xSt = pad + colSt * (cellW + pad);
-                ctx.drawImage(stage, 0, 0, width, height, xSt, yRow, cellW, cellH);
 
-                // optional row label
                 if (drawLabels) {
                     ctx.fillStyle = '#aaa';
                     ctx.font = '12px system-ui';
                     ctx.textBaseline = 'top';
-                    ctx.fillText(`#${i}`, pad, yRow - 14);
+                    ctx.fillText(`#${i}`, xRawTex, y - 14);
                 }
             }
 
-            // tidy
+            // --- LOGICAL TILED-IMAGE MAPPING ---
+            for (let ti = 0; ti < mappedRows; ti++) {
+                const y = mappedY0 + ti * (cellH + pad);
+
+                const mappedColorLayer =
+                    typeof baseLayer[ti] === 'number' ? baseLayer[ti] : ti;
+                const mappedPackCount =
+                    typeof packCount[ti] === 'number' ? packCount[ti] : 1;
+
+                if (mappedColorLayer >= 0 && mappedColorLayer < colorLayers) {
+                    drawLayerCell(renderOutput.texture, mappedColorLayer, xTiColor, y, 'ti-color');
+                } else {
+                    drawEmptyCell(xTiColor, y, 'unmapped');
+                }
+
+                if (ti < stencilLayers) {
+                    drawLayerCell(renderOutput.stencil, ti, xTiStencil, y, 'ti-stencil');
+                } else {
+                    drawEmptyCell(xTiStencil, y, '—');
+                }
+
+                if (drawLabels) {
+                    ctx.fillStyle = '#aaa';
+                    ctx.font = '12px system-ui';
+                    ctx.textBaseline = 'top';
+                    const label =
+                        `TI #${ti} → tex L${mappedColorLayer}` +
+                        (mappedPackCount > 1 ? ` (${mappedPackCount} packs)` : '');
+                    ctx.fillText(label, xTiColor, y - 14);
+                }
+            }
+
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         }
 
@@ -1042,6 +1411,7 @@
      * @memberof FlexRenderer
      */
     $.FlexRenderer.idPattern = /^(?!_)(?:(?!__)[0-9a-zA-Z_])*$/;
+    $.FlexRenderer.__runtimeSupportCache = null;
 
     $.FlexRenderer.BLEND_MODE = [
         'mask',

@@ -1,5 +1,6 @@
 (function($) {
-    $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
+
+$.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     /**
      * Create a WebGL 2.0 rendering implementation.
      * @param {OpenSeadragon.FlexRenderer} renderer
@@ -61,10 +62,6 @@
         return `osd_texture(${index}, 0, ${vec2coords})`;
     }
 
-    sampleTextureAtlas(textureId, vec2coords) {
-        return `osd_atlas_texture(${textureId}, ${vec2coords})`;
-    }
-
     getTextureSize(index) {
         return `osd_texture_size(${index})`;
     }
@@ -102,10 +99,32 @@
     }
 
     getBlendingFunction(name) {
+        const h = `
+float blendLum(vec3 c){return dot(c,vec3(.3,.59,.11));}
+float blendSat(vec3 c){return max(max(c.r,c.g),c.b)-min(min(c.r,c.g),c.b);}
+vec3 clipColor(vec3 c){
+    float l=blendLum(c),n=min(min(c.r,c.g),c.b),x=max(max(c.r,c.g),c.b);
+    if(n<0.) c=l+((c-l)*l)/(l-n);
+    if(x>1.) c=l+((c-l)*(1.-l))/(x-l);
+    return c;
+}
+vec3 setLum(vec3 c,float l){return clipColor(c+vec3(l-blendLum(c)));}
+vec3 setSat(vec3 c,float s){
+    float mn=min(min(c.r,c.g),c.b),mx=max(max(c.r,c.g),c.b);
+    if(mx<=mn) return vec3(0.);
+    if(c.r<=c.g&&c.g<=c.b) return vec3(0.,((c.g-mn)*s)/(mx-mn),s);
+    if(c.r<=c.b&&c.b<=c.g) return vec3(0.,s,((c.b-mn)*s)/(mx-mn));
+    if(c.g<=c.r&&c.r<=c.b) return vec3(((c.r-mn)*s)/(mx-mn),0.,s);
+    if(c.g<=c.b&&c.b<=c.r) return vec3(s,0.,((c.b-mn)*s)/(mx-mn));
+    if(c.b<=c.r&&c.r<=c.g) return vec3(((c.r-mn)*s)/(mx-mn),s,0.);
+    return vec3(s,((c.g-mn)*s)/(mx-mn),0.);
+}`;
+
         return {
             mask: `
-if (close(fg.a, 0.0))  return vec4(.0);
+if (close(fg.a, 0.0)) return vec4(.0);
 return bg;`,
+
             'source-over': `
 if (!stencilPasses) return bg;
 vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
@@ -187,14 +206,13 @@ return blendAlpha(fg, bg, clamp(rgb, 0.0, 1.0));`,
 
             'hard-light': `
 if (!stencilPasses) return bg;
-vec3 rgb = mix(2.0 * fg.rgb * bg.rgb, 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb), step(0.5, fg.rgb));
-return blendAlpha(fg, bg, rgb);`,
+vec3 rgb = mix(2.0 * fg.rgb * bg.rgb, 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb), step(vec3(0.5), fg.rgb));
+return blendAlpha(fg, bg, clamp(rgb, 0.0, 1.0));`,
 
             'soft-light': `
 if (!stencilPasses) return bg;
-vec3 rgb = (bg.rgb < 0.5)
-    ? (2.0 * fg.rgb * bg.rgb + fg.rgb * fg.rgb * (1.0 - 2.0 * bg.rgb))
-    : (sqrt(fg.rgb) * (2.0 * bg.rgb - 1.0) + 2.0 * fg.rgb * (1.0 - bg.rgb));
+vec3 d1=((16.0*bg.rgb-12.0)*bg.rgb+4.0)*bg.rgb,d2=sqrt(bg.rgb),D=mix(d1,d2,step(vec3(.25),bg.rgb));
+vec3 rgb=mix(bg.rgb-(1.0-2.0*fg.rgb)*bg.rgb*(1.0-bg.rgb),bg.rgb+(2.0*fg.rgb-1.0)*(D-bg.rgb),step(vec3(.5),fg.rgb));
 return blendAlpha(fg, bg, clamp(rgb, 0.0, 1.0));`,
 
             difference: `
@@ -204,6 +222,26 @@ return blendAlpha(fg, bg, abs(bg.rgb - fg.rgb));`,
             exclusion: `
 if (!stencilPasses) return bg;
 return blendAlpha(fg, bg, bg.rgb + fg.rgb - 2.0 * bg.rgb * fg.rgb);`,
+
+            hue: `
+${h}
+if (!stencilPasses) return bg;
+return blendAlpha(fg, bg, clamp(setLum(setSat(fg.rgb, blendSat(bg.rgb)), blendLum(bg.rgb)), 0.0, 1.0));`,
+
+            saturation: `
+${h}
+if (!stencilPasses) return bg;
+return blendAlpha(fg, bg, clamp(setLum(setSat(bg.rgb, blendSat(fg.rgb)), blendLum(bg.rgb)), 0.0, 1.0));`,
+
+            color: `
+${h}
+if (!stencilPasses) return bg;
+return blendAlpha(fg, bg, clamp(setLum(fg.rgb, blendLum(bg.rgb)), 0.0, 1.0));`,
+
+            luminosity: `
+${h}
+if (!stencilPasses) return bg;
+return blendAlpha(fg, bg, clamp(setLum(bg.rgb, blendLum(fg.rgb)), 0.0, 1.0));`,
         }[name];
     }
 };
@@ -218,230 +256,8 @@ $.FlexRenderer.WebGL20.SecondPassProgram = class extends $.FlexRenderer.WGLProgr
         this._bgColor = 'vec4(.0)';
     }
 
-    build(shaderMap, keyOrder) {
-        if (!keyOrder.length) {
-            // Todo prevent unimportant first init build call
-            this.vertexShader = this._getVertexShaderSource();
-            this.fragmentShader = this._getFragmentShaderSource('', '',
-                '', $.FlexRenderer.ShaderLayer.__globalIncludes);
-            return;
-        }
-
-        // todo consider clip test before setting intermediate color -> but we would have to test all clips, not just one
-        //   no clip: whole viewport has the color
-        //   clip: only rendered parts have the background color (likely more desirable)
-        let definition = '',
-            execution = `
-vec4 intermediate_color = ${this._bgColor};
-overall_color = intermediate_color;
-vec4 clip_color = vec4(.0);
-`,
-            customBlendFunctions = '';
-
-        const addShaderDefinition = shader => {
-            definition += `
-// ${shader.constructor.type()} - Definition
-${shader.getFragmentShaderDefinition()}
-// ${shader.constructor.type()} - Custom blending function for a given shader
-${shader.getCustomBlendFunction(shader.uid + "_blend_func")}
-// ${shader.constructor.type()} - Shader code execution
-vec4 ${shader.uid}_execution() {
-${shader.getFragmentShaderExecution()}
-}
-`;
-        };
-
-        let remainingBlenForShaderID = '';
-        const getRemainingBlending = () => { //todo next blend argument
-            if (remainingBlenForShaderID) {
-                const i = keyOrder.indexOf(remainingBlenForShaderID);
-                const shader = shaderMap[remainingBlenForShaderID];
-                // Set stencilPasses again: we are going to blend deferred data
-                return `
-    stencilPasses = osd_stencil_texture(${i}, 0, v_texture_coords).r > 0.995;
-    overall_color = ${shader.mode === "show" ? "blend_source_over" : shader.uid + "_blend_func"}(intermediate_color, overall_color);
-`;
-            }
-            return '';
-        };
-
-        let i = 0;
-        for (; i < keyOrder.length; i++) {
-            const previousShaderID = keyOrder[i];
-            const previousShaderLayer = shaderMap[previousShaderID];
-            const shaderConf = previousShaderLayer.getConfig();
-
-            const opacityModifier = previousShaderLayer.opacity ? `opacity * ${previousShaderLayer.opacity.sample()}` : 'opacity';
-            if (shaderConf.type === "none" || shaderConf.error || !shaderConf.visible) {
-                //prevents the layer from being accounted for in the rendering (error or not visible)
-
-                // For explanation of this logics see main shader part below
-                if (previousShaderLayer._mode !== "clip") {
-                    execution += `${getRemainingBlending()}
-// ${previousShaderLayer.constructor.type()} - Disabled (error or visible = false)
-intermediate_color = vec4(.0);`;
-                    remainingBlenForShaderID = previousShaderID;
-                } else {
-                    execution += `
-// ${previousShaderLayer.constructor.type()} - Disabled with Clipmask (error or visible = false)
-intermediate_color = ${previousShaderLayer.uid}_blend_func(vec4(.0), intermediate_color);`;
-                }
-                continue;
-            }
-
-            addShaderDefinition(previousShaderLayer);
-            execution += `
-    instance_id = ${i};
-    stencilPasses = osd_stencil_texture(${i}, 0, v_texture_coords).r > 0.995;
-    vec3 attrs_${i} = u_shaderVariables[${i}];
-    opacity = attrs_${i}.x;
-    pixelSize = attrs_${i}.y;
-    zoom = attrs_${i}.z;`;
-
-            // To understand the code below: show & mask are basically same modes: they blend atop
-            // of existing data. 'Show' just uses built-in alpha blending.
-            // However, clip blends on the previous output only (and it can chain!).
-
-            if (previousShaderLayer._mode !== "clip") {
-                    execution += `${getRemainingBlending()}
-// ${previousShaderLayer.constructor.type()} - Blending
-intermediate_color = ${previousShaderLayer.uid}_execution();
-intermediate_color.a = intermediate_color.a * ${opacityModifier};`;
-
-                remainingBlenForShaderID = previousShaderID;
-            } else {
-                execution += `
-// ${previousShaderLayer.constructor.type()} - Clipping
-clip_color = ${previousShaderLayer.uid}_execution();
-clip_color.a = clip_color.a * ${opacityModifier};
-intermediate_color = ${previousShaderLayer.uid}_blend_func(clip_color, intermediate_color);`;
-            }
-        } // end of for cycle
-
-        if (remainingBlenForShaderID) {
-            execution += getRemainingBlending();
-        }
-
-        this.vertexShader = this._getVertexShaderSource();
-        this.fragmentShader = this._getFragmentShaderSource(definition, execution,
-            customBlendFunctions, $.FlexRenderer.ShaderLayer.__globalIncludes);
-    }
-
-    /**
-     * Create program.
-     * @param width
-     * @param height
-     */
-    created(width, height) {
-        const gl = this.gl;
-        const program = this.webGLProgram;
-
-        // Shader element indexes match element id (instance id) to position in the texture array
-        this._instanceOffsets = gl.getUniformLocation(program, "u_instanceOffsets[0]");
-        this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes[0]");
-        this._shaderVariables = gl.getUniformLocation(program, "u_shaderVariables");
-
-        this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
-        this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
-
-        this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
-        this.vao = gl.createVertexArray();
-    }
-
-    /**
-     * Load program. No arguments.
-     */
-    load(renderArray) {
-        const gl = this.gl;
-        // ShaderLayers' controls
-        for (const renderInfo of renderArray) {
-            renderInfo.shader.glLoaded(this.webGLProgram, gl);
-        }
-        this.atlas.load(this.webGLProgram);
-
-        const renderer = this.context.renderer;
-        const packInfo = renderer.__flexPackInfo || {};
-        const layout = packInfo.layout || {};
-        const baseLayer = layout.baseLayer || [];
-        const packCount = layout.packCount || [];
-        const channelCount = packInfo.channelCount || [];
-
-        const maxTI = this._tiledImageCount;
-        const tiInfo = new Int32Array(maxTI * 3);
-        for (let i = 0; i < maxTI; i++) {
-            const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i; // fallback
-            const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
-            tiInfo[i * 3] = base;
-            tiInfo[i * 3 + 1] = pc;
-            tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
-        }
-
-        this.gl.uniform3iv(this._tiInfoLoc, tiInfo);
-    }
-
-    /**
-     * Use program. Arbitrary arguments.
-     */
-    use(renderOutput, renderArray, options) {
-        //todo flatten render array :/
-        const gl = this.gl;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, options ? options.framebuffer : null);
-        gl.bindVertexArray(this.vao);
-
-        const shaderVariables = [];
-        const instanceOffsets = [];
-        const instanceTextureIndexes = [];
-        for (const renderInfo of renderArray) {
-            renderInfo.shader.glDrawing(this.webGLProgram, gl);
-
-            shaderVariables.push(renderInfo.opacity, renderInfo.pixelSize, renderInfo.zoom);
-
-            instanceOffsets.push(instanceTextureIndexes.length);
-            instanceTextureIndexes.push(...renderInfo.shader.getConfig().tiledImages);
-        }
-
-        // todo _instanceOffsets and _instanceTextureIndexes are possibly static per program lifetime, so we could do this once at load()
-        gl.uniform1iv(this._instanceOffsets, instanceOffsets);
-        gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
-        // todo changes dynamically, but could be stored per tiled image instead of per-shader layer
-        gl.uniform3fv(this._shaderVariables, shaderVariables);
-
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.texture);
-        gl.uniform1i(this._texturesLocation, 0);
-
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
-        gl.uniform1i(this._stencilLocation, 1);
-
-        this.atlas.bind(gl.TEXTURE2, 2);
-
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        // Unbinding textures removes feedback loop when we write to it in the first pass
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
-        gl.bindVertexArray(null);
-
-        return renderOutput;
-    }
-
-    /**
-     * Destroy program. No arguments.
-     */
-    destroy() {
-        this.gl.deleteVertexArray(this.vao);
-    }
-
-    // TODO we might want to fire only for active program and do others when really encesarry or with some delay, best at some common implementation level
-    setDimensions(x, y, width, height, levels, tiledImageCount) {
-        this._dataLayerCount = levels;
-        this._tiledImageCount = tiledImageCount;
-    }
-
     // PRIVATE FUNCTIONS
+
     /**
      * Get vertex shader's glsl code.
      * @returns {string} vertex shader's glsl code
@@ -473,34 +289,55 @@ void main() {
      * Get fragment shader's glsl code.
      * @param {string} definition ShaderLayers' glsl code placed outside the main function
      * @param {string} execution ShaderLayers' glsl code placed inside the main function
-     * @param {string} globalScopeCode ShaderLayers' glsl code shared between the their instantions
+     * @param {string} customBlendFunctions ShaderLayers' GLSL code for custom blend functions
+     * @param {Object} globalScopeCode ShaderLayers' glsl code shared between the their instantions
      * @returns {string} fragment shader's glsl code
      */
-    _getFragmentShaderSource(definition, execution, globalScopeCode) {
+    _getFragmentShaderSource(definition, execution, customBlendFunctions, globalScopeCode) {
         const fragmentShaderSource = `#version 300 es
 precision mediump int;
 precision mediump float;
 precision mediump sampler2DArray;
 
+
+// UNIFORMS
+
 // Stores shader index -> pointer to u_instanceTextureIndexes
 uniform int u_instanceOffsets[${this.textureMappingsUniformSize}];
+
 // Stores texture indexes for each shader, beginning at index obtained from u_instanceOffsets
 uniform int u_instanceTextureIndexes[${this.textureMappingsUniformSize}];
+
 // Carries shader global attributes (opacity, pixelSize, zoom)
 uniform vec3 u_shaderVariables[${this.textureMappingsUniformSize}];
+
 // For each tiled image, we store (base texture offset, pack count, channel count)
 uniform ivec3 u_tiInfo[${this.textureMappingsUniformSize}];
 
+uniform sampler2DArray u_inputTextures;
+uniform sampler2DArray u_stencilTextures;
+
+
+// INPUT VARIABLES
+
 in vec2 v_texture_coords;
 
-bool stencilPasses;
+
+// OUTPUT VARIABLES
+
+out vec4 final_color;
+
+
+// GLOBAL VARIABLES
+
 int instance_id;
+bool stencilPasses;
 float opacity;
 float pixelSize;
 float zoom;
 
-uniform sampler2DArray u_inputTextures;
-uniform sampler2DArray u_stencilTextures;
+
+// FUNCTION DEFINITIONS
 
 int osd_pack_count(int sourceIndex) {
     int offset = u_instanceOffsets[instance_id];
@@ -550,34 +387,335 @@ ivec2 osd_texture_size(int sourceIndex) {
 
 ${this.atlas.getFragmentShaderDefinition()}
 
-// UTILITY function
+// UTILITY FUNCTION
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
 }
 
-// BLEND attributes
-out vec4 overall_color;
+
+// BLEND FUNCTIONS
+
 vec4 blendAlpha(vec4 fg, vec4 bg, vec3 rgb) {
     float a = fg.a + bg.a * (1.0 - fg.a);
     return vec4(rgb, a);
 }
+
 vec4 blend_source_over(vec4 fg, vec4 bg) {
     if (!stencilPasses) return bg;
     vec4 pre_fg = vec4(fg.rgb * fg.a, fg.a);
     return pre_fg + bg * (1.0 - pre_fg.a);
 }
 
-// GLOBAL SCOPE CODE:
-${Object.keys(globalScopeCode).length !== 0 ? Object.values(globalScopeCode).join("\n") : '\n    // No global scope code here...'}
+// CUSTOM BLEND FUNCTIONS
 
-// DEFINITIONS OF SHADERLAYERS:
-${definition !== '' ? definition : '\n    // No shaderLayer here to define...'}
+${customBlendFunctions ? customBlendFunctions : "    // No custom blend functions here..."}
+
+
+// GLOBAL SCOPE SHADER LAYER CODE
+
+${Object.keys(globalScopeCode).length !== 0 ? Object.values(globalScopeCode).join("\n") : "    // No global scope shader layer code here..."}
+
+
+// SHADER LAYERS DEFINITIONS
+
+${definition !== "" ? definition : "    // No shader layer definitions here..."}
+
+
+// MAIN FUNCTION
 
 void main() {
-    ${execution}
+${execution}
 }`;
 
         return fragmentShaderSource;
+    }
+
+    build(shaderMap, keyOrder) {
+        if (!keyOrder.length) {
+            // Todo prevent unimportant first init build call
+            this.vertexShader = this._getVertexShaderSource();
+            this.fragmentShader = this._getFragmentShaderSource("", "", "", $.FlexRenderer.ShaderLayer.__globalIncludes);
+            return;
+        }
+
+        const renderer = this.context && this.context.renderer;
+        if (!renderer || typeof renderer.getFlatShaderLayers !== "function") {
+            throw new Error(
+                "$.FlexRenderer.WebGL20.SecondPassProgram::build: renderer.getFlatShaderLayers() is not available."
+            );
+        }
+
+        const flatShaders = renderer.getFlatShaderLayers(shaderMap, keyOrder);
+        for (let slot = 0; slot < flatShaders.length; slot++) {
+            flatShaders[slot].__renderSlot = slot;
+        }
+
+        let definition = "";
+        let execution = `
+    vec4 intermediate_color = ${this._bgColor};
+    vec4 overall_color = intermediate_color;
+    vec4 clip_color = vec4(.0);
+
+    vec3 attrs;
+`;
+        let customBlendFunctions = "";
+
+        const addShaderDefinition = shader => {
+            definition += `
+// ${shader.uid} - Definition
+${shader.getFragmentShaderDefinition()}
+
+// ${shader.uid} - Custom blending function for a given shader
+${shader.getCustomBlendFunction(shader.uid + "_blend_func")}
+
+// ${shader.uid} - Shader code execution
+vec4 ${shader.uid}_execution() {
+${shader.getFragmentShaderExecution()}
+}
+`;
+        };
+
+        const getStencilPassCode = shader => {
+            const shaderConfig = shader.getConfig();
+            const hasSources = Array.isArray(shaderConfig.tiledImages) && shaderConfig.tiledImages.length > 0;
+
+            if (!hasSources) {
+                return "    stencilPasses = true;";
+            }
+
+            return `    stencilPasses = osd_stencil_texture(${shader.__renderSlot}, 0, v_texture_coords).r > 0.995;`;
+        };
+
+        let remainingBlendShader = null;
+        const getRemainingBlending = () => {
+            if (!remainingBlendShader) {
+                return "";
+            }
+
+            return `
+${getStencilPassCode(remainingBlendShader)}
+    overall_color = ${remainingBlendShader.mode === "show" ? "blend_source_over" : remainingBlendShader.uid + "_blend_func"}(intermediate_color, overall_color);
+`;
+        };
+
+        for (const shaderLayerId of keyOrder) {
+            const shaderLayer = shaderMap[shaderLayerId];
+            const shaderLayerConfig = shaderLayer.getConfig();
+            const slot = shaderLayer.__renderSlot;
+            const opacityModifier = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
+
+            execution += `\n    // ${shaderLayer.uid}\n`;
+
+            if (shaderLayerConfig.type === "none" || shaderLayerConfig.error || !shaderLayerConfig.visible) {
+                if (shaderLayer._mode !== "clip") {
+                    execution += `${getRemainingBlending()}
+    // ${shaderLayer.uid} - Disabled (error or visible = false)
+    intermediate_color = vec4(0.0);
+`;
+                    remainingBlendShader = shaderLayer;
+                } else {
+                    execution += `
+    // ${shaderLayer.uid} - Disabled with Clipmask (error or visible = false)
+    intermediate_color = ${shaderLayer.uid}_blend_func(vec4(0.0), intermediate_color);
+`;
+                }
+
+                continue;
+            }
+
+            addShaderDefinition(shaderLayer);
+
+            execution += `
+    instance_id = ${slot};
+${getStencilPassCode(shaderLayer)}
+    attrs = u_shaderVariables[${slot}];
+    opacity = attrs.x;
+    pixelSize = attrs.y;
+    zoom = attrs.z;
+`;
+
+            if (shaderLayer._mode !== "clip") {
+                execution += `${getRemainingBlending()}
+    // ${shaderLayer.uid} - blending
+    intermediate_color = ${shaderLayer.uid}_execution();
+    intermediate_color.a = intermediate_color.a * ${opacityModifier};
+`;
+                remainingBlendShader = shaderLayer;
+            } else {
+                execution += `
+    // ${shaderLayer.uid} - clipping
+    clip_color = ${shaderLayer.uid}_execution();
+    clip_color.a = clip_color.a * ${opacityModifier};
+    intermediate_color = ${shaderLayer.uid}_blend_func(clip_color, intermediate_color);
+`;
+            }
+        }
+
+        if (remainingBlendShader) {
+            execution += getRemainingBlending();
+        }
+
+        execution += "\n    final_color = overall_color;\n";
+
+        this.vertexShader = this._getVertexShaderSource();
+        this.fragmentShader = this._getFragmentShaderSource(
+            definition,
+            execution,
+            customBlendFunctions,
+            $.FlexRenderer.ShaderLayer.__globalIncludes
+        );
+    }
+
+    /**
+     * Create program.
+     * @param width
+     * @param height
+     */
+    created(width, height) {
+        const gl = this.gl;
+        const program = this.webGLProgram;
+
+        // Shader element indexes match element id (instance id) to position in the texture array
+        this._instanceOffsets = gl.getUniformLocation(program, "u_instanceOffsets[0]");
+        this._instanceTextureIndexes = gl.getUniformLocation(program, "u_instanceTextureIndexes[0]");
+        this._shaderVariables = gl.getUniformLocation(program, "u_shaderVariables");
+
+        this._texturesLocation = gl.getUniformLocation(program, "u_inputTextures");
+        this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
+
+        this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
+        this.vao = gl.createVertexArray();
+
+        // TODO: is this refreshing logic necessary? if enableing this, delete the above refresh, not needed, will be done at use(...)
+        //  this._uploadedPackInfoVersion = -1;
+    }
+
+    /**
+     * Load program. No arguments.
+     */
+    load(renderArray) {
+        const gl = this.gl;
+        // ShaderLayers' controls
+        for (const renderInfo of renderArray) {
+            renderInfo.shader.glLoaded(this.webGLProgram, gl);
+        }
+        this.atlas.load(this.webGLProgram);
+
+        const renderer = this.context.renderer;
+        const packInfo = renderer.__flexPackInfo || {};
+        const layout = packInfo.layout || {};
+        const baseLayer = layout.baseLayer || [];
+        const packCount = layout.packCount || [];
+        const channelCount = packInfo.channelCount || [];
+
+        const maxTI = this._tiledImageCount;
+        const tiInfo = new Int32Array(maxTI * 3);
+        for (let i = 0; i < maxTI; i++) {
+            const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i; // fallback
+            const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
+            tiInfo[i * 3] = base;
+            tiInfo[i * 3 + 1] = pc;
+            tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
+        }
+
+        this.gl.uniform3iv(this._tiInfoLoc, tiInfo);
+    }
+
+    /**
+     * Use program. Arbitrary arguments.
+     */
+    use(renderOutput, renderArray, options) {
+        const gl = this.gl;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, options ? options.framebuffer : null);
+        gl.bindVertexArray(this.vao);
+
+        // TODO: is this refreshing logic necessary?
+        // this._uploadTiledImageInfo();
+
+        const shaderVariables = [];
+        const instanceOffsets = [];
+        const instanceTextureIndexes = [];
+
+        for (const renderInfo of renderArray) {
+            renderInfo.shader.glDrawing(this.webGLProgram, gl);
+
+            shaderVariables.push(renderInfo.opacity, renderInfo.pixelSize, renderInfo.zoom);
+
+            instanceOffsets.push(instanceTextureIndexes.length);
+            instanceTextureIndexes.push(...renderInfo.shader.getConfig().tiledImages);
+        }
+
+        // todo _instanceOffsets and _instanceTextureIndexes are possibly static per program lifetime, so we could do this once at load()
+        gl.uniform1iv(this._instanceOffsets, instanceOffsets);
+        gl.uniform1iv(this._instanceTextureIndexes, instanceTextureIndexes);
+        // todo changes dynamically, but could be stored per tiled image instead of per-shader layer
+        gl.uniform3fv(this._shaderVariables, shaderVariables);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.texture);
+        gl.uniform1i(this._texturesLocation, 0);
+
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
+        gl.uniform1i(this._stencilLocation, 1);
+
+        this.atlas.bind(gl.TEXTURE2, 2);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        // Unbinding textures removes feedback loop when we write to it in the first pass
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+        gl.bindVertexArray(null);
+
+        return renderOutput;
+    }
+
+    // TODO: is this refreshing logic necessary?
+    // _uploadTiledImageInfo() {
+    //     const renderer = this.context.renderer;
+    //     const packInfo = renderer.__flexPackInfo || {};
+    //     const version = packInfo.version || 0;
+    //
+    //     if (this._uploadedPackInfoVersion === version) {
+    //         return;
+    //     }
+    //
+    //     const gl = this.gl;
+    //     const layout = packInfo.layout || {};
+    //     const baseLayer = layout.baseLayer || [];
+    //     const packCount = layout.packCount || [];
+    //     const channelCount = packInfo.channelCount || [];
+    //
+    //     const maxTI = this._tiledImageCount;
+    //     const tiInfo = new Int32Array(maxTI * 3);
+    //
+    //     for (let i = 0; i < maxTI; i++) {
+    //         const base = (typeof baseLayer[i] === "number") ? baseLayer[i] : i;
+    //         const pc = (typeof packCount[i] === "number") ? packCount[i] : 1;
+    //
+    //         tiInfo[i * 3 + 0] = base;
+    //         tiInfo[i * 3 + 1] = pc;
+    //         tiInfo[i * 3 + 2] = (typeof channelCount[i] === "number") ? channelCount[i] : pc * 4;
+    //     }
+    //
+    //     gl.uniform3iv(this._tiInfoLoc, tiInfo);
+    //     this._uploadedPackInfoVersion = version;
+    // }
+
+    /**
+     * Destroy program. No arguments.
+     */
+    destroy() {
+        this.gl.deleteVertexArray(this.vao);
+    }
+
+    // TODO we might want to fire only for active program and do others when really encesarry or with some delay, best at some common implementation level
+    setDimensions(x, y, width, height, levels, tiledImageCount) {
+        this._dataLayerCount = levels;
+        this._tiledImageCount = tiledImageCount;
     }
 };
 
@@ -1507,7 +1645,14 @@ vec4 osd_atlas_texture(int textureId, vec2 uv) {
     _tryPlaceRect(layerIndex, w, h) {
         const W = this.layerWidth;
         const H = this.layerHeight;
-        const st = this._layerState[layerIndex];
+        let st = this._layerState[layerIndex];
+
+        if (!st) {
+            // todo it happens that the _layerState is empty but plaing called! this is a bug
+            $.console.error('TextureAtlas2DArray._tryPlaceRect: invalid layerIndex');
+            this._createTexture(W, H, this.layers);
+            st = this._layerState[layerIndex];
+        }
 
         // try existing shelves
         for (const shelf of st.shelves) {

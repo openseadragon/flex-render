@@ -16,6 +16,25 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "encode data values in opacity";
     }
 
+    static docs() {
+        return {
+            summary: "Heatmap shader for one scalar channel.",
+            description: "Uses the sampled scalar value as alpha and colors visible pixels with a configurable RGB control once the sampled value passes the threshold. In inverted mode, values below the threshold are shown with full alpha while values above the threshold are inverted.",
+            kind: "shader",
+            inputs: [{
+                index: 0,
+                acceptedChannelCounts: [1],
+                description: "The value to map to opacity"
+            }],
+            controls: [
+                { name: "use_channel0", default: "r" },
+                { name: "color", ui: "color", valueType: "vec3", default: "#fff700" },
+                { name: "threshold", ui: "range_input", valueType: "float", default: 1, min: 1, max: 100, step: 1 },
+                { name: "inverse", ui: "bool", valueType: "bool", default: false }
+            ]
+        };
+    }
+
     static sources() {
         return [{
             acceptsChannelCount: (x) => x === 1,
