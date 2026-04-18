@@ -96,6 +96,7 @@
          * @param {Object} privateOptions.cache
          * @param {Function} privateOptions.invalidate  // callback to re-render the viewport
          * @param {Function} privateOptions.rebuild     // callback to rebuild the WebGL program
+         * @param {Function} privateOptions.refresh     // callback to recreate the ShaderLayer when control layout changes
          * @param {Function} privateOptions.refetch     // callback to reinitialize the whole WebGLDrawer; NOT USED
          *
          * @constructor
@@ -118,6 +119,7 @@
 
             this.invalidate = privateOptions.invalidate;
             this._rebuild = privateOptions.rebuild;
+            this._refresh = privateOptions.refresh;
             this._refetch = privateOptions.refetch;
             this._controls = {};
 
@@ -222,6 +224,20 @@
          *     }, ...
          * }
          *
+         * Repeated control arrays are also supported:
+         * get defaultControls () => {
+         *     items: {
+         *         array: {
+         *             count: (layer) => <number>,
+         *             name: (index, layer, baseName) => <controlName>,   // OPTIONAL
+         *             item: (index, layer, baseName) => ({
+         *                 default: {...},
+         *                 accepts: (type, instance) => <>
+         *             })
+         *         }
+         *     }
+         * }
+         *
          * use: controlId: false to disable a specific control (e.g. all shaders
          *  support opacity by default - use to remove this feature)
          *
@@ -253,6 +269,15 @@
                     accepts: (type, instance) => type === "float"
                 }
             };
+        }
+
+        /**
+         * Instance-level control definition hook.
+         * Override when the available controls depend on current config/state.
+         * @returns {object}
+         */
+        getControlDefinitions() {
+            return $.extend(true, {}, this.constructor.defaultControls);
         }
 
         /**
@@ -306,7 +331,7 @@
          * Build the ShaderLayer's controls.
          */
         _buildControls() {
-            const defaultControls = this.constructor.defaultControls;
+            const defaultControls = this.getControlDefinitions();
 
             // add opacity control manually to every ShaderLayer; if not already defined
             if (defaultControls.opacity === undefined || (typeof defaultControls.opacity === "object" && !defaultControls.opacity.accepts("float"))) {
@@ -316,14 +341,16 @@
                 };
             }
 
-            for (let controlName in defaultControls) {
+            const expandedControls = this._expandControlDefinitions(defaultControls);
+
+            for (let controlName in expandedControls) {
                 // with use_ prefix are defined not UI controls but filters, blend modes, etc.
                 if (controlName.startsWith("use_")) {
                     continue;
                 }
 
                 // control is manually disabled
-                const controlConfig = defaultControls[controlName];
+                const controlConfig = expandedControls[controlName];
                 if (controlConfig === false) {
                     continue;
                 }
@@ -334,6 +361,51 @@
                 // simplify usage of controls (e.g. this.opacity instead of this._controls.opacity)
                 this[controlName] = control;
             }
+        }
+
+        _expandControlDefinitions(controlDefinitions) {
+            const expanded = {};
+
+            for (const [baseName, controlConfig] of Object.entries(controlDefinitions || {})) {
+                if (!controlConfig || typeof controlConfig !== "object" || !controlConfig.array) {
+                    expanded[baseName] = controlConfig;
+                    continue;
+                }
+
+                const arrayConfig = controlConfig.array;
+                const countValue = typeof arrayConfig.count === "function" ?
+                    arrayConfig.count(this, baseName) :
+                    arrayConfig.count;
+                const count = Math.max(0, Number.parseInt(countValue, 10) || 0);
+
+                for (let index = 0; index < count; index++) {
+                    const itemConfig = typeof arrayConfig.item === "function" ?
+                        arrayConfig.item(index, this, baseName) :
+                        $.extend(true, {}, arrayConfig.item || {});
+
+                    if (!itemConfig || itemConfig === false) {
+                        continue;
+                    }
+
+                    const expandedName = itemConfig.name || (
+                        typeof arrayConfig.name === "function" ?
+                            arrayConfig.name(index, this, baseName) :
+                            `${baseName}${index}`
+                    );
+
+                    if (!expandedName) {
+                        continue;
+                    }
+
+                    if (itemConfig.name !== undefined) {
+                        delete itemConfig.name;
+                    }
+
+                    expanded[expandedName] = itemConfig;
+                }
+            }
+
+            return expanded;
         }
 
         /**

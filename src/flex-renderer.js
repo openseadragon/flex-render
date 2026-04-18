@@ -411,6 +411,9 @@
             if (!implementation) {
                 return;
             }
+            if (this._program === implementation) {
+                this._program = null;
+            }
             implementation.unload();
             implementation.destroy();
             this.gl.deleteProgram(implementation._webGLProgram);
@@ -474,6 +477,10 @@
                 // callback to rebuild the WebGL program
                 rebuild: () => {
                     this.registerProgram(null, this.webglContext.secondPassProgramKey);
+                },
+                // callback to recreate the shader when control topology changes
+                refresh: () => {
+                    this.refreshShaderLayer(id, { rebuildProgram: true });
                 },
                 // callback to reinitialize the drawer; NOT USED
                 refetch: this.refetchCallback
@@ -624,6 +631,32 @@
             }
             shader.destroy();
             delete this._shaders[id];
+        }
+
+        /**
+         * Recreate an existing shader layer while preserving its bound config object
+         * and current order. This is needed when the set of owned controls changes.
+         * @param {string} id
+         * @param {object} options
+         * @param {boolean} [options.rebuildProgram=true]
+         * @returns {ShaderLayer|null}
+         */
+        refreshShaderLayer(id, options = {}) {
+            id = $.FlexRenderer.sanitizeKey(id);
+            const shader = this._shaders[id];
+            if (!shader) {
+                return null;
+            }
+
+            const config = shader.getConfig();
+            const rebuiltShader = this.createShaderLayer(id, config, false);
+            const shouldRebuild = options.rebuildProgram !== false;
+
+            if (shouldRebuild) {
+                this.registerProgram(null, this.webglContext.secondPassProgramKey);
+            }
+
+            return rebuiltShader;
         }
 
         /**

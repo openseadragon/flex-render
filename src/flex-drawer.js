@@ -156,7 +156,7 @@
                 shader = $.extend(true, {}, shader);
             }
 
-            shader.id = shader.id || tiledImage.__shaderConfig.id || this.constructor.idGenerator;
+            shader.id = shader.id || (tiledImage.__shaderConfig && tiledImage.__shaderConfig.id) || this.constructor.idGenerator;
             tiledImage.__shaderConfig = shader;
 
             // if already configured, request re-configuration
