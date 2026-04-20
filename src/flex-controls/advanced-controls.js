@@ -58,11 +58,11 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
-                let self = $(e.target),
-                    selected = self.val();
+                const self = e.target;
+                const selected = self.value;
                 _this.colorPallete = $.FlexRenderer.ColorMaps[selected][_this.maxSteps];
                 _this._setPallete(_this.colorPallete);
-                self.css("background", _this.cssGradient(_this.colorPallete));
+                self.style.background = _this.cssGradient(_this.colorPallete);
                 _this.value = selected;
                 _this.store(selected);
                 _this.changed("default", _this.pallete, _this.value, _this);
@@ -76,9 +76,9 @@ $.FlexRenderer.UIControls.ColorMap = class extends $.FlexRenderer.UIControls.ICo
             for (let pallete of $.FlexRenderer.ColorMaps.schemeGroups[this.params.mode]) {
                 schemas.push(`<option value="${pallete}">${pallete}</option>`);
             }
-            node.html(schemas.join(""));
-            node.val(this.value);
-            node.on('change', updater);
+            node.innerHTML = schemas.join("");
+            node.value = this.value;
+            node.addEventListener("change", updater);
         } else {
             this._setPallete(this.colorPallete);
             this.updateColormapUI();
@@ -116,8 +116,10 @@ for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
     }
 
     updateColormapUI() {
-        let node = $(`#${this.id}`);
-        node.css("background", this.cssGradient(this.colorPallete));
+        let node = document.getElementById(this.id);
+        if (node) {
+            node.style.background = this.cssGradient(this.colorPallete);
+        }
         return node;
     }
 
@@ -309,14 +311,16 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
         if (this.params.interactive) {
             const _this = this;
             let updater = function(e) {
-                let self = $(e.target),
-                    index = Number.parseInt(e.target.dataset.index, 10),
-                    selected = self.val();
+                const self = e.target;
+                const index = Number.parseInt(e.target.dataset.index, 10);
+                const selected = self.value;
 
                 if (Number.isInteger(index)) {
                     _this.colorPallete[index] = selected;
                     _this._setPallete(_this.colorPallete);
-                    self.parent().css("background", _this.cssGradient(_this.colorPallete));
+                    if (self.parentElement) {
+                        self.parentElement.style.background = _this.cssGradient(_this.colorPallete);
+                    }
                     _this.value = _this.colorPallete;
                     _this.store(_this.colorPallete);
                     _this.changed("default", _this.pallete, _this.value, _this);
@@ -328,9 +332,8 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
             let node = this.updateColormapUI();
 
             const width = 1 / this.colorPallete.length * 100;
-            node.html(this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join(""));
-            node.val(this.value);
-            node.children().on('change', updater);
+            node.innerHTML = this.colorPallete.map((x, i) => `<input type="color" style="width: ${width}%; height: 30px; background: none; border: none; padding: 4px 5px;" value="${x}" data-index="${i}">`).join("");
+            Array.from(node.children).forEach(child => child.addEventListener("change", updater));
         } else {
             this._setPallete(this.colorPallete);
             this.updateColormapUI();

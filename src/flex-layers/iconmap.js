@@ -52,6 +52,7 @@
                     },
                     { name: "grid_layout", ui: "select_int", valueType: "int", default: { default: 0 } },
                     { name: "cell_size", ui: "float", valueType: "float", default: { default: 15 } },
+                    { name: "jitter", ui: "float", valueType: "float", default: { default: 0 } },
                     { name: "icon_scale", ui: "float", valueType: "float", default: { default: 0.82 } },
                     { name: "clip_icons", ui: "bool", valueType: "bool", default: { default: false } }
                 ]
@@ -109,7 +110,8 @@
                         default: 0,
                         options: [
                             { value: 0, label: "Square" },
-                            { value: 1, label: "Brick" }
+                            { value: 1, label: "Brick" },
+                            { value: 2, label: "Hex" }
                         ]
                     },
                     accepts: (type) => type === "int"
@@ -122,6 +124,17 @@
                         min: 3,
                         max: 50,
                         step: 1
+                    },
+                    accepts: (type) => type === "float"
+                },
+                jitter: {
+                    default: {
+                        type: "range_input",
+                        title: "Jitter",
+                        default: 0,
+                        min: 0,
+                        max: 0.45,
+                        step: 0.01
                     },
                     accepts: (type) => type === "float"
                 },
@@ -148,12 +161,10 @@
         }
 
         init() {
-            const initialClassCount = this._getClassCount();
-
             if (this.threshold) {
                 this.threshold.on("breaks", (raw) => {
-                    const nextClassCount = Array.isArray(raw) ? raw.length + 1 : initialClassCount;
-                    if (nextClassCount !== initialClassCount && typeof this._refresh === "function") {
+                    const nextClassCount = Array.isArray(raw) ? raw.length + 1 : this._getClassCount();
+                    if (nextClassCount !== this._getIconControlCount() && typeof this._refresh === "function") {
                         this._refresh();
                         return;
                     }
@@ -173,11 +184,44 @@
         }
 
         _getClassCount() {
-            if (this.threshold && typeof this.threshold.getIntervalCount === "function") {
+            if (this.threshold && Array.isArray(this.threshold.encodedValues)) {
                 return this.threshold.getIntervalCount();
+            }
+            const configuredBreaks = this._getConfiguredThresholdBreaks();
+            if (configuredBreaks) {
+                return Math.max(1, configuredBreaks.length + 1);
             }
             const fallbackBreaks = this.constructor.defaultControls.threshold.default.default || [];
             return Math.max(1, fallbackBreaks.length + 1);
+        }
+
+        _getConfiguredThresholdBreaks() {
+            const configured = this._customControls && this._customControls.threshold;
+            if (!configured || typeof configured !== "object") {
+                return null;
+            }
+
+            if (Array.isArray(configured.breaks)) {
+                return configured.breaks;
+            }
+
+            if (Array.isArray(configured.default)) {
+                return configured.default;
+            }
+
+            if (configured.default && typeof configured.default === "object" && Array.isArray(configured.default.default)) {
+                return configured.default.default;
+            }
+
+            return null;
+        }
+
+        _getIconControlCount() {
+            let count = 0;
+            while (this._getIconControl(count)) {
+                count++;
+            }
+            return count;
         }
 
         _getDefaultIconName(index) {
@@ -198,18 +242,80 @@ float iconmap_decodeCellSize_${uid}(float rawValue) {
         return rawValue <= 1.0 ? mix(${this.cell_size.params.min}.0, ${this.cell_size.params.max}.0, clamp(rawValue, 0.0, 1.0)) : rawValue;
     }
 
-vec3 iconmap_gridUv_${uid}(vec2 fragCoord) {
+float iconmap_hash_${uid}(vec2 value) {
+        return fract(sin(dot(value, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+vec2 iconmap_hash2_${uid}(vec2 value) {
+        return vec2(
+            iconmap_hash_${uid}(value),
+            iconmap_hash_${uid}(value + vec2(19.19, 73.73))
+        );
+    }
+
+vec2 iconmap_jitterOffset_${uid}(vec2 cellId, vec2 spacing, float amount) {
+        if (amount <= 0.0) {
+            return vec2(0.0);
+        }
+        vec2 rnd = iconmap_hash2_${uid}(cellId) * 2.0 - 1.0;
+        return rnd * amount * spacing;
+    }
+
+vec3 iconmap_squarePlacement_${uid}(vec2 fragCoord, float cellSize, float jitterAmount, bool brickLayout) {
+        float row = floor(fragCoord.y / cellSize);
+        float shift = brickLayout ? 0.5 * cellSize * mod(row, 2.0) : 0.0;
+        float col = floor((fragCoord.x + shift) / cellSize);
+        vec2 centerPx = vec2((col + 0.5) * cellSize - shift, (row + 0.5) * cellSize);
+        centerPx += iconmap_jitterOffset_${uid}(vec2(col, row), vec2(cellSize), jitterAmount);
+        return vec3(centerPx, cellSize);
+    }
+
+vec3 iconmap_hexPlacement_${uid}(vec2 fragCoord, float cellSize, float jitterAmount) {
+        float rowHeight = cellSize * 0.8660254037844386;
+        float baseRow = floor(fragCoord.y / rowHeight);
+        vec2 bestCenter = fragCoord;
+        float bestDist2 = 1e30;
+
+        for (int rowOffset = -1; rowOffset <= 1; rowOffset++) {
+            float row = baseRow + float(rowOffset);
+            float shift = 0.5 * cellSize * mod(row, 2.0);
+            float colBase = floor((fragCoord.x + shift) / cellSize);
+
+            for (int colOffset = -1; colOffset <= 1; colOffset++) {
+                float col = colBase + float(colOffset);
+                vec2 centerPx = vec2((col + 0.5) * cellSize - shift, (row + 0.5) * rowHeight);
+                centerPx += iconmap_jitterOffset_${uid}(vec2(col, row), vec2(cellSize, rowHeight), jitterAmount);
+                vec2 delta = fragCoord - centerPx;
+                float dist2 = dot(delta, delta);
+                if (dist2 < bestDist2) {
+                    bestDist2 = dist2;
+                    bestCenter = centerPx;
+                }
+            }
+        }
+
+        return vec3(bestCenter, rowHeight);
+    }
+
+vec3 iconmap_gridPlacement_${uid}(vec2 fragCoord) {
         int layoutMode = ${this.grid_layout.sample()};
         float cellSize = max(iconmap_decodeCellSize_${uid}(${this.cell_size.sample()}), 1.0);
+        float jitterAmount = clamp(${this.jitter.sample()}, 0.0, 0.45);
+
+        if (layoutMode == 2) {
+            return iconmap_hexPlacement_${uid}(fragCoord, cellSize, jitterAmount);
+        }
+
+        return iconmap_squarePlacement_${uid}(fragCoord, cellSize, jitterAmount, layoutMode == 1);
+    }
+
+vec3 iconmap_gridUv_${uid}(vec2 fragCoord) {
+        vec3 placement = iconmap_gridPlacement_${uid}(fragCoord);
         float iconScale = clamp(${this.icon_scale.sample()}, 0.3, 1.0);
         float padding = clamp((1.0 - iconScale) * 0.5, 0.0, 0.49);
-        vec2 coord = fragCoord / vec2(cellSize);
-        vec2 cell = floor(coord);
-        if (layoutMode == 1) {
-            float oddRow = mod(cell.y, 2.0);
-            coord.x += 0.5 * oddRow;
-        }
-        vec2 local = fract(coord);
+        vec2 centerPx = placement.xy;
+        float footprint = max(placement.z, 1.0);
+        vec2 local = (fragCoord - centerPx) / vec2(footprint) + 0.5;
 
         vec2 spacingVec = vec2(padding);
         vec2 feather = max(fwidth(local), vec2(1e-4));
@@ -225,17 +331,7 @@ vec3 iconmap_gridUv_${uid}(vec2 fragCoord) {
     }
 
 vec2 iconmap_cellCenterUv_${uid}(vec2 dataUv) {
-        int layoutMode = ${this.grid_layout.sample()};
-        float cellSize = max(iconmap_decodeCellSize_${uid}(${this.cell_size.sample()}), 1.0);
-        vec2 coord = gl_FragCoord.xy / vec2(cellSize);
-        vec2 cell = floor(coord);
-        float xShift = 0.0;
-        if (layoutMode == 1) {
-            float oddRow = mod(cell.y, 2.0);
-            xShift = 0.5 * oddRow;
-        }
-        vec2 centerCoord = vec2(cell.x + 0.5 - xShift, cell.y + 0.5);
-        vec2 centerPx = centerCoord * vec2(cellSize);
+        vec2 centerPx = iconmap_gridPlacement_${uid}(gl_FragCoord.xy).xy;
         vec2 deltaPx = centerPx - gl_FragCoord.xy;
         return dataUv + dFdx(dataUv) * deltaPx.x + dFdy(dataUv) * deltaPx.y;
     }`;
@@ -278,6 +374,8 @@ ${this._buildIconSamplerFunction()}
 
         getFragmentShaderExecution() {
             const uid = this.uid;
+            const thresholdMaskAtCenter = `sample_advanced_slider(centerChan, ${this.threshold.webGLVariableName}_breaks, ${this.threshold.webGLVariableName}_mask, true, ${this.threshold.webGLVariableName}_min)`;
+            const thresholdMaskAtPoint = `sample_advanced_slider(chan, ${this.threshold.webGLVariableName}_breaks, ${this.threshold.webGLVariableName}_mask, true, ${this.threshold.webGLVariableName}_min)`;
 
             return `
 float chan = ${this.sampleChannel("v_texture_coords")};
@@ -289,8 +387,9 @@ if (grid.z <= 0.0) {
 
 vec2 centerUv = iconmap_cellCenterUv_${uid}(v_texture_coords);
 float centerChan = ${this.sampleChannel("centerUv")};
+float centerMask = ${thresholdMaskAtCenter};
 float classValue = ${this.threshold.sample("centerChan", "float")};
-float visibleCenter = step(0.05, classValue + 0.5);
+float visibleCenter = step(0.05, centerMask);
 
 if (visibleCenter <= 0.0) {
     return vec4(0.0);
@@ -298,7 +397,7 @@ if (visibleCenter <= 0.0) {
 
 int classIndex = int(floor(classValue + 0.5));
 vec4 icon = iconmap_sampleIcon_${uid}(classIndex, grid.xy);
-float visible = ${this.clip_icons.sample()} ? step(0.05, ${this.threshold.sample("chan", "float")} + 0.5) : 1.0;
+float visible = ${this.clip_icons.sample()} ? step(0.05, ${thresholdMaskAtPoint}) : 1.0;
 
 return vec4(icon.rgb, icon.a * visible * grid.z);
 `;

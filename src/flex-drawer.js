@@ -33,6 +33,8 @@
             this._destroyed = false;
             this._imageSmoothingEnabled = false; // will be updated by setImageSmoothingEnabled
             this._configuredExternally = false;
+            this._managedShaderSourceSlots = new Map();
+            this._managedShaderSourceNextIndex = null;
             // We have 'undefined' extra format for blank tiles
             this._supportedFormats = ["rasterBlob", "context2d", "image", "vector-mesh", "gpuTextureSet", "undefined"];
             this.rebuildCounter = 0;
@@ -42,6 +44,12 @@
             this.viewer.rejectEventHandler("tile-drawing", "The WebGLDrawer does not raise the tile-drawing event");
             this.viewer.world.addHandler("remove-item", (e) => {
                 const tiledImage = e.item;
+                if (tiledImage && tiledImage.__flexManagedShaderSourceSlotKey) {
+                    const slot = this._managedShaderSourceSlots.get(tiledImage.__flexManagedShaderSourceSlotKey);
+                    if (slot && slot.item === tiledImage) {
+                        slot.item = null;
+                    }
+                }
                 // if managed internally on the instance (regardless of renderer state), handle removal
                 if (tiledImage.__shaderConfig) {
                     this.renderer.removeShader(tiledImage.__shaderConfig.id);
@@ -80,6 +88,7 @@
                 preloadCache: true,
                 copyShaderConfig: false,
                 handleNavigator: true,
+                shaderSourceResolver: null,
                 // hex bg color, by default transparent
                 backgroundColor: undefined
             };
@@ -200,6 +209,10 @@
                 tiledImage.removeHandler('composite-operation-change', tiledImage.__wglCompositeHandler);
             }
 
+            if (tiledImage.__flexManagedShaderSourceSlotKey) {
+                return this._requestRebuild();
+            }
+
             // If we configure externally the renderer, simply bypass
             if (this._configuredExternally) {
                 // __shaderConfig reference is kept only when managed internally, can keep custom shader config for particular tiled image
@@ -294,6 +307,335 @@
                 this.viewer.navigator.drawer.rebuild();
             }
             return this._requestRebuild();
+        }
+
+        _applyShaderConfigMutationRequest(request = {}, syncNavigator = true) {
+            const {
+                shaderId,
+                mutation,
+                refreshShader = true,
+                rebuildProgram = true,
+                rebuildDrawer = true,
+                resetItems = true,
+                reason = "shader-config-mutation"
+            } = request;
+
+            if (!shaderId) {
+                return $.Promise.resolve();
+            }
+
+            const shader = this.renderer.getShaderLayer(shaderId);
+            if (!shader) {
+                return $.Promise.resolve();
+            }
+
+            const config = shader.getConfig();
+            if (typeof mutation === "function") {
+                mutation(config, shader);
+            } else if (mutation && typeof mutation === "object") {
+                Object.assign(config, mutation);
+            }
+
+            if (refreshShader) {
+                this.renderer.refreshShaderLayer(shaderId, { rebuildProgram });
+            } else if (rebuildProgram) {
+                this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
+            }
+
+            this.renderer.notifyVisualizationChanged({
+                reason,
+                shaderId,
+                shaderType: shader.constructor.type()
+            });
+
+            if (syncNavigator && this.options.handleNavigator && this.viewer.navigator && this.viewer.navigator.drawer) {
+                this.viewer.navigator.drawer._applyShaderConfigMutationRequest(request, false);
+            }
+
+            if (resetItems && this.viewer.world && typeof this.viewer.world.resetItems === "function") {
+                this.viewer.world.resetItems();
+            }
+
+            if (rebuildDrawer) {
+                return this._requestRebuild(0, true);
+            }
+            this.viewer.forceRedraw();
+            return $.Promise.resolve();
+        }
+
+        _handleRefetchRequest(request = undefined) {
+            if (!request) {
+                return this.viewer.world.resetItems();
+            }
+
+            if (request.kind === "shader-source-request") {
+                return this._handleShaderSourceRequest(request);
+            }
+
+            if (request.kind === "shader-config-mutation") {
+                return this._applyShaderConfigMutationRequest(request);
+            }
+
+            return this.viewer.world.resetItems();
+        }
+
+        _getManagedShaderSourceSlotKey(request = {}) {
+            return `${request.shaderId || "shader"}:${Number.parseInt(request.sourceIndex, 10) || 0}`;
+        }
+
+        _allocateManagedShaderSourceWorldIndex() {
+            const worldCount = this.viewer && this.viewer.world ? this.viewer.world.getItemCount() : 0;
+            if (!Number.isInteger(this._managedShaderSourceNextIndex)) {
+                this._managedShaderSourceNextIndex = worldCount;
+            } else {
+                this._managedShaderSourceNextIndex = Math.max(this._managedShaderSourceNextIndex, worldCount);
+            }
+            return this._managedShaderSourceNextIndex++;
+        }
+
+        _isManagedShaderSourceDescriptor(entry) {
+            return !!(entry && typeof entry === "object" && (
+                entry.tileSource !== undefined ||
+                entry.source !== undefined ||
+                entry.open !== undefined ||
+                entry.openOptions !== undefined
+            ));
+        }
+
+        _normalizeManagedShaderSourceDescriptor(entry = {}) {
+            const descriptor = $.extend(true, {}, entry);
+            const openOptions = $.extend(true, {},
+                descriptor.openOptions || descriptor.open || {}
+            );
+            const tileSource = descriptor.tileSource !== undefined ? descriptor.tileSource : descriptor.source;
+
+            delete descriptor.openOptions;
+            delete descriptor.open;
+            delete descriptor.tileSource;
+            delete descriptor.source;
+
+            return {
+                tileSource,
+                openOptions,
+                meta: descriptor
+            };
+        }
+
+        _openManagedShaderSourceAtSlot(slot, descriptor) {
+            const normalized = this._normalizeManagedShaderSourceDescriptor(descriptor);
+            if (normalized.tileSource === undefined) {
+                return $.Promise.reject(new Error("Managed shader source descriptor requires tileSource or source."));
+            }
+
+            const openOptions = $.extend(true, {
+                index: slot.worldIndex,
+                replace: !!slot.item,
+                opacity: 0
+            }, normalized.openOptions || {}, {
+                tileSource: normalized.tileSource,
+                index: slot.worldIndex,
+                replace: !!slot.item
+            });
+
+            return new $.Promise((resolve, reject) => {
+                const success = openOptions.success;
+                const error = openOptions.error;
+
+                openOptions.success = (event) => {
+                    const item = event && event.item ? event.item : null;
+                    if (item) {
+                        item.__flexManagedShaderSourceSlotKey = slot.key;
+                        slot.item = item;
+                    }
+                    if (typeof success === "function") {
+                        success(event);
+                    }
+                    resolve({
+                        worldIndex: slot.worldIndex,
+                        tiledImage: item
+                    });
+                };
+
+                openOptions.error = (event) => {
+                    if (typeof error === "function") {
+                        error(event);
+                    }
+                    reject(new Error(event && event.message ? event.message : "Failed to open managed shader source."));
+                };
+
+                this.viewer.addTiledImage(openOptions);
+            });
+        }
+
+        realizeShaderSourceDescriptor(request = {}, descriptor = undefined) {
+            const entry = descriptor === undefined ? request.entry : descriptor;
+            if (!this._isManagedShaderSourceDescriptor(entry)) {
+                return $.Promise.resolve(null);
+            }
+
+            const slotKey = this._getManagedShaderSourceSlotKey(request);
+            let slot = this._managedShaderSourceSlots.get(slotKey);
+            if (!slot) {
+                slot = {
+                    key: slotKey,
+                    worldIndex: this._allocateManagedShaderSourceWorldIndex(),
+                    item: null
+                };
+                this._managedShaderSourceSlots.set(slotKey, slot);
+            }
+
+            return this._openManagedShaderSourceAtSlot(slot, entry).then(result => ({
+                worldIndex: result.worldIndex,
+                refreshShader: true,
+                rebuildProgram: true,
+                rebuildDrawer: true,
+                resetItems: true
+            }));
+        }
+
+        _resolveSourceRequestResult(request, result) {
+            if (result === undefined || result === null || result === false) {
+                return null;
+            }
+
+            if (Number.isInteger(result)) {
+                return {
+                    mutation: (config) => {
+                        const tiledImages = Array.isArray(config.tiledImages) ? config.tiledImages.slice() : [];
+                        tiledImages[request.sourceIndex || 0] = result;
+                        config.tiledImages = tiledImages;
+                    }
+                };
+            }
+
+            if (Array.isArray(result)) {
+                return {
+                    mutation: (config) => {
+                        config.tiledImages = result.slice();
+                    }
+                };
+            }
+
+            if (typeof result === "object") {
+                if (Array.isArray(result.tiledImages)) {
+                    return {
+                        ...result,
+                        mutation: result.mutation || ((config) => {
+                            config.tiledImages = result.tiledImages.slice();
+                        })
+                    };
+                }
+                if (Number.isInteger(result.worldIndex)) {
+                    return {
+                        ...result,
+                        mutation: result.mutation || ((config) => {
+                            const tiledImages = Array.isArray(config.tiledImages) ? config.tiledImages.slice() : [];
+                            tiledImages[request.sourceIndex || 0] = result.worldIndex;
+                            config.tiledImages = tiledImages;
+                        })
+                    };
+                }
+                if (typeof result.mutation === "function") {
+                    return result;
+                }
+            }
+
+            return null;
+        }
+
+        _handleShaderSourceRequest(request = {}) {
+            const shader = request.shaderId ? this.renderer.getShaderLayer(request.shaderId) : null;
+            if (!shader) {
+                return $.Promise.resolve();
+            }
+
+            const directWorldIndex = Number.parseInt(request.entry, 10);
+            if (Number.isFinite(directWorldIndex) && String(directWorldIndex) === String(request.entry).trim()) {
+                return this._applyShaderConfigMutationRequest({
+                    ...request,
+                    kind: "shader-config-mutation",
+                    mutation: (config) => {
+                        const tiledImages = Array.isArray(config.tiledImages) ? config.tiledImages.slice() : [];
+                        tiledImages[request.sourceIndex || 0] = directWorldIndex;
+                        config.tiledImages = tiledImages;
+                    },
+                    reason: request.reason || "shader-source-request",
+                    refreshShader: request.refreshShader !== false,
+                    rebuildProgram: request.rebuildProgram !== false,
+                    rebuildDrawer: request.rebuildDrawer !== false,
+                    resetItems: request.resetItems !== false
+                });
+            }
+
+            if (this._isManagedShaderSourceDescriptor(request.entry)) {
+                return this.realizeShaderSourceDescriptor(request).then(resolved => {
+                    if (!resolved) {
+                        return $.Promise.resolve();
+                    }
+                    const mutationSpec = this._resolveSourceRequestResult(request, resolved);
+                    if (!mutationSpec) {
+                        return $.Promise.resolve();
+                    }
+                    return this._applyShaderConfigMutationRequest({
+                        ...request,
+                        ...resolved,
+                        ...mutationSpec,
+                        kind: "shader-config-mutation",
+                        reason: request.reason || resolved.reason || "shader-source-request"
+                    });
+                });
+            }
+
+            const resolver = this.options.shaderSourceResolver;
+            if (typeof resolver !== "function") {
+                $.console.warn("Shader source request received but no drawer.options.shaderSourceResolver is configured.", request);
+                return $.Promise.resolve();
+            }
+
+            const outcome = resolver({
+                request,
+                drawer: this,
+                viewer: this.viewer,
+                renderer: this.renderer,
+                shader,
+                shaderConfig: shader.getConfig()
+            });
+
+            return $.Promise.resolve(outcome).then(result => {
+                if (this._isManagedShaderSourceDescriptor(result)) {
+                    return this.realizeShaderSourceDescriptor(request, result).then(realized =>
+                        realized ? (() => {
+                            const mutationSpec = this._resolveSourceRequestResult(request, realized);
+                            if (!mutationSpec) {
+                                return $.Promise.resolve();
+                            }
+                            return this._applyShaderConfigMutationRequest({
+                                ...request,
+                                ...realized,
+                                ...mutationSpec,
+                                kind: "shader-config-mutation",
+                                reason: request.reason || realized.reason || "shader-source-request"
+                            });
+                        })() : $.Promise.resolve()
+                    );
+                }
+
+                const resolved = this._resolveSourceRequestResult(request, result);
+                if (!resolved) {
+                    return $.Promise.resolve();
+                }
+
+                return this._applyShaderConfigMutationRequest({
+                    ...request,
+                    ...resolved,
+                    kind: "shader-config-mutation",
+                    reason: request.reason || resolved.reason || "shader-source-request",
+                    refreshShader: resolved.refreshShader !== false,
+                    rebuildProgram: resolved.rebuildProgram !== false,
+                    rebuildDrawer: resolved.rebuildDrawer !== false,
+                    resetItems: resolved.resetItems !== false
+                });
+            });
         }
 
         /**
@@ -877,7 +1219,7 @@
                 // Required
                 {
                     redrawCallback: () => this.viewer.forceRedraw(),
-                    refetchCallback: () => this.viewer.world.resetItems(),
+                    refetchCallback: (request) => this._handleRefetchRequest(request),
                     uniqueId: "osd_" + this._id,
                     // TODO: problem when navigator renders first
                     // Navigator must not have the handler since it would attempt to define the controls twice
@@ -1089,14 +1431,20 @@
                 return;
             }
 
+            const metadataWasReady = !!tiledImage.__flexMetadataReady;
+            let metadataChanged = !metadataWasReady;
+
             if (tiledImage.__flexPackCount !== packCount) {
                 tiledImage.__flexPackCount = packCount;
                 this._packLayoutDirty = true;
+                metadataChanged = true;
             }
             if (tiledImage.__flexChannelCount !== channelCount) {
                 tiledImage.__flexChannelCount = channelCount;
                 this._packLayoutDirty = true;
+                metadataChanged = true;
             }
+            tiledImage.__flexMetadataReady = true;
 
             if (this.renderer && !this.renderer.__flexPackInfo) {
                 this.renderer.__flexPackInfo = {
@@ -1112,6 +1460,39 @@
                     this.renderer.__flexPackInfo.channelCount[tiIndex] = channelCount;
                 }
             }
+
+            if (metadataChanged) {
+                this._refreshShadersForTiledImage(tiledImage);
+            }
+        }
+
+        _refreshShadersForTiledImage(tiledImage) {
+            if (!this.renderer || !this.viewer || !this.viewer.world || !tiledImage) {
+                return;
+            }
+
+            const tiIndex = this.viewer.world.getIndexOfItem(tiledImage);
+            if (tiIndex < 0) {
+                return;
+            }
+
+            const idsToRefresh = [];
+            this.renderer.forEachShaderLayer(undefined, undefined, shader => {
+                const config = shader.getConfig();
+                if (config && Array.isArray(config.tiledImages) && config.tiledImages.includes(tiIndex)) {
+                    idsToRefresh.push(shader.id);
+                }
+            });
+
+            if (!idsToRefresh.length) {
+                return;
+            }
+
+            for (const shaderId of idsToRefresh) {
+                this.renderer.refreshShaderLayer(shaderId, { rebuildProgram: false });
+            }
+
+            this._requestRebuild(0, true);
         }
 
         _buildVectorTileInfo(data, gl) {
@@ -1266,6 +1647,8 @@
 
             const width = bitmap.width;
             const height = bitmap.height;
+
+            this._updatePackMetadata(tiledImage, 1, 4);
 
             const tileInfo = {
                 position: this._computeTilePosition(tile, tiledImage, width, height),

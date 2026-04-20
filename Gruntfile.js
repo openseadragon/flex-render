@@ -42,6 +42,7 @@ module.exports = function(grunt) {
             "src/flex-layers/colormap.js",
             "src/flex-layers/default.js",
             "src/flex-layers/edge-isoline.js",
+            "src/flex-layers/edge.js",
             "src/flex-layers/group.js",
             "src/flex-layers/heatmap.js",
             "src/flex-layers/iconmap.js",
@@ -50,6 +51,7 @@ module.exports = function(grunt) {
             "src/flex-layers/threshold.js",
             "src/flex-layers/time-series.js",
             "src/flex-layers/channel.js",
+            "src/flex-layers/channel-series.js",
             "src/mvt-tile-source.js",
             "src/fabric-tile-source.js",
             "src/configurator.js"

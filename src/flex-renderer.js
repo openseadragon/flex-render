@@ -163,6 +163,59 @@
         }
 
         /**
+         * Pre-compilation shader configuration cleanup
+         * @param config
+         * @param context
+         * @return {*|{shaders}}
+         */
+        static normalizeShaderConfig(config, context = {}) {
+            if (!config || typeof config !== "object") {
+                return config;
+            }
+
+            let normalized = config;
+            const Shader = normalized.type ? $.FlexRenderer.ShaderMediator.getClass(normalized.type) : null;
+
+            if (Shader && typeof Shader.normalizeConfig === "function") {
+                const next = Shader.normalizeConfig(normalized, context);
+                if (next && typeof next === "object") {
+                    normalized = next;
+                }
+            }
+
+            if (normalized.shaders && typeof normalized.shaders === "object" && !Array.isArray(normalized.shaders)) {
+                normalized.shaders = $.FlexRenderer.normalizeShaderMap(normalized.shaders, {
+                    ...context,
+                    parentConfig: normalized
+                });
+            }
+
+            return normalized;
+        }
+
+        /**
+         * Normalize shader configuration map - all shaders at once.
+         * @param shaderMap
+         * @param context
+         * @return {*}
+         */
+        static normalizeShaderMap(shaderMap, context = {}) {
+            if (!shaderMap || typeof shaderMap !== "object" || Array.isArray(shaderMap)) {
+                return shaderMap;
+            }
+
+            for (const shaderId of Object.keys(shaderMap)) {
+                shaderMap[shaderId] = $.FlexRenderer.normalizeShaderConfig(shaderMap[shaderId], {
+                    ...context,
+                    shaderId,
+                    path: Array.isArray(context.path) ? context.path.concat([shaderId]) : [shaderId]
+                });
+            }
+
+            return shaderMap;
+        }
+
+        /**
          * Get Currently used WebGL version
          * @return {String|*}
          */
@@ -486,8 +539,14 @@
                 refetch: this.refetchCallback
             });
 
-            shader.construct();
-            this._shaders[id] = shader;
+            try {
+                // Construct needs valid reference
+                this._shaders[id] = shader;
+                shader.construct();
+            } catch (e) {
+                delete this._shaders[id];
+            }
+
             return shader;
         }
 

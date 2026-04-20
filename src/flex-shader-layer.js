@@ -97,7 +97,7 @@
          * @param {Function} privateOptions.invalidate  // callback to re-render the viewport
          * @param {Function} privateOptions.rebuild     // callback to rebuild the WebGL program
          * @param {Function} privateOptions.refresh     // callback to recreate the ShaderLayer when control layout changes
-         * @param {Function} privateOptions.refetch     // callback to reinitialize the whole WebGLDrawer; NOT USED
+         * @param {Function} privateOptions.refetch     // callback to request source/config refetch work from the owning drawer
          *
          * @constructor
          * @memberOf FlexRenderer.ShaderLayer
@@ -269,6 +269,21 @@
                     accepts: (type, instance) => type === "float"
                 }
             };
+        }
+
+        /**
+         * @typedef {Object} NormalizationContext
+         * @property {function} [expandDataSourceRef] - function that maps synthetic source references to real references usable by openseadragon
+         */
+
+        /**
+         * Modification of the configuration object before it is used.
+         * @param {ShaderConfig} config
+         * @param {NormalizationContext} context
+         * @returns {ShaderConfig}
+         */
+        static normalizeConfig(config, context = {}) {
+            return config;
         }
 
         /**
@@ -477,6 +492,9 @@
         includeGlobalCode(key, code) {
             const container = this.constructor.__globalIncludes;
             if (container[key]) {
+                if (container[key] === code) {
+                    return;
+                }
                 console.warn('$.FlexRenderer.ShaderLayer::includeGlobalCode: Global code with key', key, 'already exists in this.__globalIncludes. Overwriting the content!');
             }
             container[key] = code;
@@ -627,6 +645,7 @@
          *   sampleChannel("v_texCoord")                      // sourceIndex=0, baseChannel=0
          *   sampleChannel("v_texCoord", 1)                   // sourceIndex=1, baseChannel=0
          *   sampleChannel("v_texCoord", { baseChannel: 4 })  // sourceIndex=0, baseChannel=4
+         *   sampleChannel("v_texCoord", { baseChannel: "my_uniform" })  // sourceIndex=0, runtime GLSL expression
          *   sampleChannel("v_texCoord", 0, { baseChannel: 8, raw: true })
          *
          * Returns GLSL:
@@ -658,7 +677,7 @@
 
             // Override from options if provided
             if (opt) {
-                if (typeof opt.baseChannel === "number") {
+                if (typeof opt.baseChannel === "number" || typeof opt.baseChannel === "string") {
                     baseChannel = opt.baseChannel;
                 }
                 if (opt.raw != null) { // eslint-disable-line eqeqeq
@@ -678,7 +697,7 @@
          * @return {number|*|number}
          */
         getSourceChannelCount(sourceIndex = 0) {
-            const cfg = this.getConfig();
+            const cfg = this.getConfig() || {};
             if (!cfg.tiledImages || cfg.tiledImages.length <= sourceIndex) {
                 return 4;
             }
@@ -688,6 +707,133 @@
                 return 4;
             }
             return drawer.getChannelCount(worldIndex);
+        }
+
+        /**
+         * Resolve the tiled image used by a given shader source slot.
+         * @param {number} sourceIndex
+         * @return {OpenSeadragon.TiledImage|null}
+         */
+        getSourceTiledImage(sourceIndex = 0) {
+            const cfg = this.getConfig() || {};
+            if (!cfg.tiledImages || cfg.tiledImages.length <= sourceIndex) {
+                return null;
+            }
+
+            const worldIndex = cfg.tiledImages[sourceIndex];
+            const drawer = this.webglContext.renderer.drawer;
+            const world = drawer && drawer.viewer ? drawer.viewer.world : null;
+            if (!world || worldIndex == null) {  // eslint-disable-line eqeqeq
+                return null;
+            }
+
+            return world.getItemAt(worldIndex) || null;
+        }
+
+        /**
+         * Get pack count for a given sourceIndex.
+         * @param {number} sourceIndex
+         * @return {number}
+         */
+        getSourcePackCount(sourceIndex = 0) {
+            const cfg = this.getConfig() || {};
+            if (!cfg.tiledImages || cfg.tiledImages.length <= sourceIndex) {
+                return 1;
+            }
+            const worldIndex = cfg.tiledImages[sourceIndex];
+            const drawer = this.webglContext.renderer.drawer;
+            if (!drawer || worldIndex == null) {  // eslint-disable-line eqeqeq
+                return 1;
+            }
+            return drawer.getPackCount(worldIndex);
+        }
+
+        /**
+         * Get source dimensions when available from the tile source metadata.
+         * @param {number} sourceIndex
+         * @return {{width:number, height:number}}
+         */
+        getSourceDimensions(sourceIndex = 0) {
+            const tiledImage = this.getSourceTiledImage(sourceIndex);
+            const source = tiledImage && tiledImage.source;
+            const dimensions = source && source.dimensions;
+
+            return {
+                width: dimensions && typeof dimensions.x === "number" ? dimensions.x : (source && source.width) || 0,
+                height: dimensions && typeof dimensions.y === "number" ? dimensions.y : (source && source.height) || 0,
+            };
+        }
+
+        /**
+         * Get source level metadata.
+         * @param {number} sourceIndex
+         * @return {{minLevel:number, maxLevel:number, levelCount:number}}
+         */
+        getSourceLevels(sourceIndex = 0) {
+            const tiledImage = this.getSourceTiledImage(sourceIndex);
+            const source = tiledImage && tiledImage.source;
+            const minLevel = Number.isInteger(source && source.minLevel) ? source.minLevel : 0;
+            const maxLevel = Number.isInteger(source && source.maxLevel) ? source.maxLevel : minLevel;
+
+            return {
+                minLevel,
+                maxLevel,
+                levelCount: Math.max(0, maxLevel - minLevel + 1),
+            };
+        }
+
+        /**
+         * Get source metadata object from the tile source when available.
+         * @param {number} sourceIndex
+         * @return {object|null}
+         */
+        getSourceMetadata(sourceIndex = 0) {
+            const tiledImage = this.getSourceTiledImage(sourceIndex);
+            const source = tiledImage && tiledImage.source;
+            if (!source) {
+                return null;
+            }
+
+            if (typeof source.getMetadata === "function") {
+                return source.getMetadata();
+            }
+            return source;
+        }
+
+        /**
+         * Get consolidated source information for the given source slot.
+         * metadataReady becomes true after the drawer has observed tile payload metadata
+         * for this source, which matters for gpuTextureSet inputs where channel/pack counts
+         * are only known after data arrives.
+         *
+         * @param {number} sourceIndex
+         * @return {{
+         *   tiledImage: OpenSeadragon.TiledImage|null,
+         *   metadata: object|null,
+         *   metadataReady: boolean,
+         *   channelCount: number,
+         *   packCount: number,
+         *   dimensions: {width:number, height:number},
+         *   minLevel: number,
+         *   maxLevel: number,
+         *   levelCount: number
+         * }}
+         */
+        getSourceInfo(sourceIndex = 0) {
+            const tiledImage = this.getSourceTiledImage(sourceIndex);
+            const levels = this.getSourceLevels(sourceIndex);
+
+            return {
+                tiledImage,
+                metadata: this.getSourceMetadata(sourceIndex),
+                metadataReady: !!(tiledImage && tiledImage.__flexMetadataReady),
+                channelCount: this.getSourceChannelCount(sourceIndex),
+                packCount: this.getSourcePackCount(sourceIndex),
+                dimensions: this.getSourceDimensions(sourceIndex),
+                minLevel: levels.minLevel,
+                maxLevel: levels.maxLevel,
+                levelCount: levels.levelCount,
+            };
         }
 
         /**
@@ -701,6 +847,16 @@
                 baseChannel = 0;
             }
             return baseChannel;
+        }
+
+        /**
+         * Get how many logical channels the configured swizzle consumes for a source.
+         * @param {number} sourceIndex
+         * @return {number}
+         */
+        getConfiguredChannelWidth(sourceIndex = 0) {
+            const pattern = this.__channels[sourceIndex];
+            return typeof pattern === "string" && pattern.length > 0 ? pattern.length : 1;
         }
 
         /**
@@ -766,6 +922,7 @@
 
             // If this is the common simple case (baseChannel==0, contiguous, canonical "xyz"):
             const contiguous =
+                typeof baseChannel === "number" &&
                 baseChannel === 0 &&
                 offsets.length <= 4 &&
                 offsets.every((o, i) => o === i);
@@ -777,7 +934,11 @@
 
             // TODO: we should call here API of the underlying engine to get sampling method, not hardcoding it here!
             //       we should also rely on osd_channel_pack instead of calling X times osd_channel
-            const comps = offsets.map(off => `osd_channel(${sourceIndex}, ${baseChannel + off}, ${uv})`);
+            const baseExpr = typeof baseChannel === "string" ? `(${baseChannel})` : `${baseChannel}`;
+            const comps = offsets.map(off => {
+                const channelExpr = off === 0 ? baseExpr : `((${baseExpr}) + ${off})`;
+                return `osd_channel(${sourceIndex}, ${channelExpr}, ${uv})`;
+            });
 
             if (comps.length === 1) {
                 return comps[0];
@@ -859,6 +1020,56 @@ ${code}
          */
         getConfig() {
             return this.__shaderConfig;
+        }
+
+        /**
+         * Request a config mutation that may require drawer/world level re-fetch or shader refresh.
+         * The drawer owns how this request is fulfilled.
+         * @param {Function|Object} mutation function(config, shaderLayer) or plain patch object
+         * @param {Object} options
+         * @return {*}
+         */
+        requestConfigMutation(mutation, options = {}) {
+            if (typeof this._refetch !== "function") {
+                return undefined;
+            }
+
+            let apply = mutation;
+            if (mutation && typeof mutation === "object" && typeof mutation !== "function") {
+                apply = (config) => Object.assign(config, mutation);
+            }
+
+            return this._refetch({
+                kind: "shader-config-mutation",
+                shaderId: this.id,
+                shaderType: this.constructor.type(),
+                mutation: apply,
+                ...options
+            });
+        }
+
+        /**
+         * Request source rebinding for one shader source slot.
+         * The entry can be a direct world index or any opaque descriptor
+         * resolved later by the owning drawer/application.
+         * @param {number} sourceIndex
+         * @param {*} entry
+         * @param {Object} options
+         * @return {*}
+         */
+        requestSourceBinding(sourceIndex, entry, options = {}) {
+            if (typeof this._refetch !== "function") {
+                return undefined;
+            }
+
+            return this._refetch({
+                kind: "shader-source-request",
+                shaderId: this.id,
+                shaderType: this.constructor.type(),
+                sourceIndex,
+                entry,
+                ...options
+            });
         }
 
         // FILTERS LOGIC
