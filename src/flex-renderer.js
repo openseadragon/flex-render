@@ -164,9 +164,9 @@
 
         /**
          * Pre-compilation shader configuration cleanup
-         * @param config
-         * @param context
-         * @return {*|{shaders}}
+         * @param {ShaderConfig} config
+         * @param {NormalizationContext} context
+         * @return {ShaderConfig}
          */
         static normalizeShaderConfig(config, context = {}) {
             if (!config || typeof config !== "object") {
@@ -195,9 +195,9 @@
 
         /**
          * Normalize shader configuration map - all shaders at once.
-         * @param shaderMap
-         * @param context
-         * @return {*}
+         * @param {Record<string, ShaderConfig>} shaderMap
+         * @param {NormalizationContext} context
+         * @return {Record<string, ShaderConfig>}
          */
         static normalizeShaderMap(shaderMap, context = {}) {
             if (!shaderMap || typeof shaderMap !== "object" || Array.isArray(shaderMap)) {

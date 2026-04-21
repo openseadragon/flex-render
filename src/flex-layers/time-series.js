@@ -216,13 +216,12 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
 
         config.tiledImages = delegateConfig.tiledImages;
 
-        if (activeEntry !== null && !Number.isInteger(activeEntry)) {
-            this.requestSourceBinding(0, activeEntry, {
-                reason: "time-series-initial-source",
-                refreshShader: false,
-                rebuildProgram: false,
-                rebuildDrawer: false,
-                resetItems: false
+        if (!delegateConfig.tiledImages || delegateConfig.tiledImages.length < 1) {
+            console.warn("time-series has no initial bound source", {
+                id: this.id,
+                config: this.getConfig(),
+                activeEntry,
+                delegateConfig
             });
         }
     }
