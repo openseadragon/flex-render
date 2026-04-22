@@ -123,6 +123,7 @@
             this._shadersOrder = null;
             this._programImplementations = {};
             this.__firstPassResult = null;
+            this._inspectorState = this.constructor.normalizeInspectorState();
 
             this.canvasContextOptions = incomingOptions.canvasOptions;
             const canvas = document.createElement("canvas");
@@ -293,6 +294,13 @@
          * @return {RenderOutput}
          */
         secondPassProcessData(renderArray, options = undefined) {
+            if (this.webglContext && typeof this.webglContext.processSecondPassWithInspector === "function") {
+                const inspectorState = this.getInspectorState();
+                if (inspectorState && inspectorState.enabled && inspectorState.mode === "lens-zoom") {
+                    return this.webglContext.processSecondPassWithInspector(renderArray, options);
+                }
+            }
+
             const program = this._programImplementations[this.webglContext.secondPassProgramKey];
 
             if (this.useProgram(program, "second-pass")) {
@@ -787,6 +795,78 @@
             this.raiseEvent('visualization-change', $.extend(true, {
                 snapshot: this.getVisualizationSnapshot()
             }, payload));
+        }
+
+        static normalizeInspectorState(state = undefined) {
+            const defaults = {
+                enabled: false,
+                mode: "reveal-inside",
+                centerPx: { x: 0, y: 0 },
+                radiusPx: 96,
+                featherPx: 16,
+                lensZoom: 2,
+                shaderSplitIndex: 0,
+            };
+
+            if (!state || typeof state !== "object") {
+                return $.extend(true, {}, defaults);
+            }
+
+            const normalized = $.extend(true, {}, defaults, state);
+            const allowedModes = ["reveal-inside", "reveal-outside", "lens-zoom"];
+
+            if (!allowedModes.includes(normalized.mode)) {
+                normalized.mode = defaults.mode;
+            }
+            normalized.enabled = !!normalized.enabled;
+            normalized.radiusPx = Math.max(0, Number(normalized.radiusPx) || 0);
+            normalized.featherPx = Math.max(0, Number(normalized.featherPx) || 0);
+            normalized.lensZoom = Math.max(1, Number(normalized.lensZoom) || 1);
+            normalized.shaderSplitIndex = Math.max(0, Math.floor(Number(normalized.shaderSplitIndex) || 0));
+
+            const center = normalized.centerPx || {};
+            normalized.centerPx = {
+                x: Number(center.x) || 0,
+                y: Number(center.y) || 0,
+            };
+
+            return normalized;
+        }
+
+        setInspectorState(state = undefined, options = {}) {
+            const previous = this.getInspectorState();
+            this._inspectorState = this.constructor.normalizeInspectorState(state);
+
+            if (options.notify !== false) {
+                this.raiseEvent('inspector-change', {
+                    previous: previous,
+                    current: this.getInspectorState(),
+                    reason: options.reason || 'set-inspector-state'
+                });
+            }
+
+            if (options.redraw !== false && typeof this.redrawCallback === 'function') {
+                this.redrawCallback();
+            }
+
+            return this.getInspectorState();
+        }
+
+        getInspectorState() {
+            return $.extend(true, {}, this._inspectorState || this.constructor.normalizeInspectorState());
+        }
+
+        clearInspectorState(options = {}) {
+            return this.setInspectorState(undefined, $.extend(true, {
+                reason: 'clear-inspector-state'
+            }, options));
+        }
+
+        renderSecondPassToTexture(renderArray, options = {}) {
+            if (!this.webglContext || typeof this.webglContext.renderSecondPassToTexture !== 'function') {
+                throw new Error('Active WebGL implementation does not support second-pass texture targets.');
+            }
+            return this.webglContext.renderSecondPassToTexture(renderArray, options);
         }
 
         destroy() {

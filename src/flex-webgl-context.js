@@ -46,6 +46,10 @@
             throw("$.FlexRenderer.WebGLImplementation::secondPassProgram must be implemented!");
         }
 
+        get inspectorCompositorProgramKey() {
+            throw("$.FlexRenderer.WebGLImplementation::inspectorCompositorProgram must be implemented!");
+        }
+
         /**
          * Init phase
          */
@@ -176,6 +180,31 @@
          */
         get supportedUseModes() {
             return ["show", "blend", "clip", "mask", "clip_mask"];
+        }
+
+        /**
+         * Reuse first pass state to render second pass into a texture.
+         * @param renderArray the first pass state
+         * @param options
+         * @param [options.target] the target texture to render to
+         * @param [options.width]
+         * @param [options.height]
+         */
+        renderSecondPassToTexture(renderArray, options = {}) {
+            throw("$.FlexRenderer.WebGLImplementation::renderSecondPassToTexture() must be implemented!");
+        }
+
+        /**
+         * Reuse first pass state to render inspector pass pass instead of normal second pass.
+         * The inspector is a special mode where user mouse position controls the shown area. The outer renderer
+         * therefore gets second pass output via renderSecondPassToTexture and later combines it with the
+         * first pass output again here.
+         * @param renderArray
+         * @param options
+         * @param [options.framebuffer]
+         */
+        processSecondPassWithInspector(renderArray, options = {}) {
+            throw("$.FlexRenderer.WebGLImplementation::processSecondPassWithInspector() must be implemented!");
         }
 
         /**

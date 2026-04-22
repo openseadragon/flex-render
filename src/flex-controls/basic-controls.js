@@ -645,6 +645,19 @@ $.FlexRenderer.UIControls.IControl = class IControl {
     }
 
     /**
+     * Get how many columns UI requires. Usually 2 if title showing.
+     * The general design is that UI control should be a ROW element,
+     * and show:
+     *  - 1 column if content control shown only
+     *  - 2 columns if title shown, and content control shown
+     *  - 3 columns if title shown, and two content elements shown side-by-side (two methods of controlling the parameter synchronized)
+     * @return {number}
+     */
+    get layoutColumns() {
+        return this.params && this.params.title ? 2 : 1;
+    }
+
+    /**
      * Handles how the variable is being defined in GLSL
      *  - should use variable names derived from this.webGLVariableName
      */
@@ -1052,7 +1065,28 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
         if (!this._c1.params.interactive) {
             return "";
         }
-        return this._c1.toHtml(classes, css + "flex: 1;") + this._c2.toHtml(classes, css);
+
+        const title = this._c1.params.title ? `<span>${this._c1.params.title}</span>` : "";
+
+        const rangeHtml = $.FlexRenderer.UIControls.getUiElement("range").html(
+            this._c1.id,
+            { ...this._c1.params, title: "" },
+            classes,
+            `${css}width:100%;`
+        );
+
+        const numberHtml = $.FlexRenderer.UIControls.getUiElement("number").html(
+            this._c2.id,
+            { ...this._c2.params, title: "" },
+            classes,
+            css
+        );
+
+        return `${title}${rangeHtml}${numberHtml}`;
+    }
+
+    get layoutColumns() {
+        return this._c1.params.title ? 3 : 2;
     }
 
     define() {

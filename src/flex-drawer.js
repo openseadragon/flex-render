@@ -812,6 +812,60 @@
             this.viewer.addHandler("resize", this._resizeHandler);
         }
 
+        _resolveRenderView(view = undefined) {
+            if (view) {
+                return view;
+            }
+
+            const bounds = this.viewport.getBoundsNoRotateWithMargins(true);
+            return {
+                bounds: bounds,
+                center: new OpenSeadragon.Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+                rotation: this.viewport.getRotation(true) * Math.PI / 180,
+                zoom: this.viewport.getZoom(true)
+            };
+        }
+
+        /**
+         * Build the current second-pass uniform payload for a set of shaders.
+         * This is useful when application code wants to render an alternate output
+         * into a texture for the inspector compositor.
+         * @param {Object} [view=undefined]
+         * @param {Object.<string, ShaderLayer>} [shaderMap=this.renderer.getAllShaders()]
+         * @param {string[]} [shaderOrder=this.renderer.getShaderLayerOrder()]
+         * @return {SPRenderPackage[]}
+         */
+        getCurrentShaderRenderArray(view = undefined, shaderMap = undefined, shaderOrder = undefined) {
+            view = this._resolveRenderView(view);
+            shaderMap = shaderMap || this.renderer.getAllShaders();
+            shaderOrder = shaderOrder || this.renderer.getShaderLayerOrder();
+            return this._collectShaderUniforms(shaderMap, shaderOrder, view);
+        }
+
+        /**
+         * Render the current second-pass result into an offscreen texture target.
+         * The first pass must already be up to date for the current frame.
+         * @param {Object} [options]
+         * @return {Object}
+         */
+        renderVisualizationToTexture(options = {}) {
+            const view = this._resolveRenderView(options.view);
+            const shaderMap = options.shaderMap || this.renderer.getAllShaders();
+            const shaderOrder = options.shaderOrder || this.renderer.getShaderLayerOrder();
+            const renderArray = this._collectShaderUniforms(shaderMap, shaderOrder, view);
+            return this.renderer.renderSecondPassToTexture(renderArray, options);
+        }
+
+        setInspectorState(state) {
+            return this.renderer.setInspectorState(state, {
+                reason: "drawer-set-inspector-state"
+            });
+        }
+
+        clearInspectorState() {
+            return this.setInspectorState(undefined);
+        }
+
         // DRAWING METHODS
         /**
          * Draw using FlexRenderer.

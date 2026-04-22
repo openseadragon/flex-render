@@ -20,6 +20,10 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
         return "secondPass";
     }
 
+    get inspectorCompositorProgramKey() {
+        return "inspectorCompositor";
+    }
+
     init() {
         this.firstAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
 
@@ -44,9 +48,11 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
         };
 
         this.secondAtlas = new $.FlexRenderer.WebGL20.TextureAtlas2DArray(this.gl);
+        this._namedColorTargets = {};
 
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.FirstPassProgram(this, this.gl, this.firstAtlas), "firstPass");
         this.renderer.registerProgram(new $.FlexRenderer.WebGL20.SecondPassProgram(this, this.gl, this.secondAtlas), "secondPass");
+        this.renderer.registerProgram(new $.FlexRenderer.WebGL20.InspectorCompositorProgram(this, this.gl, this.secondAtlas), "inspectorCompositor");
     }
 
     getVersion() {
@@ -69,6 +75,10 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     setDimensions(x, y, width, height, levels, tiledImageCount) {
         this.renderer.getProgram(this.firstPassProgramKey).setDimensions(x, y, width, height, levels, tiledImageCount);
         this.renderer.getProgram(this.secondPassProgramKey).setDimensions(x, y, width, height, levels, tiledImageCount);
+        const compositor = this.renderer.getProgram(this.inspectorCompositorProgramKey);
+        if (compositor) {
+            compositor.setDimensions(x, y, width, height, levels, tiledImageCount);
+        }
         //todo consider some elimination of too many calls
     }
 
@@ -94,8 +104,140 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
     }
 
     destroy() {
+        if (this._namedColorTargets) {
+            for (const key of Object.keys(this._namedColorTargets)) {
+                this._destroyColorTarget(this._namedColorTargets[key]);
+            }
+            this._namedColorTargets = {};
+        }
         this.firstAtlas.destroy();
         this.secondAtlas.destroy();
+    }
+
+    _createColorTarget(width, height, options = {}) {
+        const gl = this.gl;
+        const target = {
+            key: options.key,
+            width: width,
+            height: height,
+            ownsTexture: true,
+            ownsFramebuffer: true,
+        };
+        const filter = options.filter || gl.LINEAR;
+        target.texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, target.texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+
+        target.framebuffer = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
+
+        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        if (status !== gl.FRAMEBUFFER_COMPLETE) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            this._destroyColorTarget(target);
+            throw new Error(`FlexRenderer color target is incomplete: 0x${status.toString(16)}`);
+        }
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        return target;
+    }
+
+    _destroyColorTarget(target) {
+        if (!target) {
+            return;
+        }
+        const gl = this.gl;
+        if (target.ownsFramebuffer && target.framebuffer) {
+            gl.deleteFramebuffer(target.framebuffer);
+            target.framebuffer = null;
+        }
+        if (target.ownsTexture && target.texture) {
+            gl.deleteTexture(target.texture);
+            target.texture = null;
+        }
+    }
+
+    _ensureColorTarget(targetOrKey, width, height, options = {}) {
+        let target = typeof targetOrKey === 'string' ? this._namedColorTargets[targetOrKey] : targetOrKey;
+        const key = typeof targetOrKey === 'string' ? targetOrKey : (target && target.key);
+
+        if (!target || target.width !== width || target.height !== height || !target.texture || !target.framebuffer) {
+            if (target) {
+                this._destroyColorTarget(target);
+            }
+            target = this._createColorTarget(width, height, {
+                ...options,
+                key: key,
+            });
+            if (key) {
+                this._namedColorTargets[key] = target;
+            }
+        }
+
+        return target;
+    }
+
+    _clearColorTarget(target, rgba = [0, 0, 0, 0]) {
+        if (!target || !target.framebuffer) {
+            return;
+        }
+        const gl = this.gl;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+        gl.clearColor(rgba[0], rgba[1], rgba[2], rgba[3]);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    renderSecondPassToTexture(renderArray, options = {}) {
+        const width = options.width || this.renderer.canvas.width || this.gl.drawingBufferWidth;
+        const height = options.height || this.renderer.canvas.height || this.gl.drawingBufferHeight;
+        const target = options.target ?
+            this._ensureColorTarget(options.target, width, height, options) :
+            this._ensureColorTarget(options.targetKey || '__second_pass_texture', width, height, options);
+
+        if (!renderArray || !renderArray.length) {
+            this._clearColorTarget(target, options.clearColor || [0, 0, 0, 0]);
+            return target;
+        }
+
+        const program = this.renderer.getProgram(this.secondPassProgramKey);
+        if (this.renderer.useProgram(program, 'second-pass')) {
+            program.load(renderArray);
+        }
+        program.use(this.renderer.__firstPassResult, renderArray, {
+            framebuffer: target.framebuffer
+        });
+        return target;
+    }
+
+    processSecondPassWithInspector(renderArray, options = undefined) {
+        const width = this.renderer.canvas.width || this.gl.drawingBufferWidth;
+        const height = this.renderer.canvas.height || this.gl.drawingBufferHeight;
+
+        const fullTarget = this._ensureColorTarget("__inspector_full", width, height, { filter: this.gl.LINEAR });
+
+        this.renderSecondPassToTexture(renderArray, {
+            target: fullTarget,
+            width,
+            height
+        });
+
+        const compositor = this.renderer.getProgram(this.inspectorCompositorProgramKey);
+        if (this.renderer.useProgram(compositor, "inspector-compositor")) {
+            compositor.load();
+        }
+
+        return compositor.use(undefined, undefined, {
+            framebuffer: options ? options.framebuffer : null,
+            inspectorState: this.renderer.getInspectorState(),
+            fullTarget: fullTarget
+        });
     }
 
     getBlendingFunction(name) {
@@ -317,6 +459,28 @@ uniform ivec3 u_tiInfo[${this.textureMappingsUniformSize}];
 uniform sampler2DArray u_inputTextures;
 uniform sampler2DArray u_stencilTextures;
 
+//  u_inspectorA = [
+//     centerPx.x,
+//     centerPx.y,
+//     radiusPx,
+//     featherPx
+//   ];
+//
+//   u_inspectorB = [
+//     enabled ? 1 : 0,
+//     modeInt,
+//     shaderSplitIndex,
+//     lensZoom
+//   ];
+//
+//   Mode mapping:
+//   - 0 disabled
+//   - 1 reveal-inside
+//   - 2 reveal-outside
+//   - 3 lens-zoom
+uniform vec4 u_inspectorA;
+uniform vec4 u_inspectorB;
+
 
 // INPUT VARIABLES
 
@@ -390,6 +554,48 @@ ${this.atlas.getFragmentShaderDefinition()}
 // UTILITY FUNCTION
 bool close(float value, float target) {
     return abs(target - value) < 0.001;
+}
+
+bool inspector_enabled() {
+    return u_inspectorB.x > 0.5;
+}
+
+int inspector_mode() {
+    return int(round(u_inspectorB.y));
+}
+
+int inspector_shader_split_index() {
+    return int(round(u_inspectorB.z));
+}
+
+float inspector_lens_zoom() {
+    return max(u_inspectorB.w, 1.0);
+}
+
+float inspector_mask(vec2 fragPx) {
+    float feather = max(u_inspectorA.w, 0.0001);
+    float distPx = distance(fragPx, u_inspectorA.xy);
+    float inner = max(u_inspectorA.z - feather, 0.0);
+    float outer = max(u_inspectorA.z + feather, feather);
+    return 1.0 - smoothstep(inner, outer, distPx);
+}
+
+float inspector_layer_alpha(int shaderSlot) {
+    if (!inspector_enabled()) {
+        return 1.0;
+    }
+
+    int mode = inspector_mode();
+    if (mode != 1 && mode != 2) {
+        return 1.0;
+    }
+
+    if (shaderSlot < inspector_shader_split_index()) {
+        return 1.0;
+    }
+
+    float mask = inspector_mask(gl_FragCoord.xy);
+    return mode == 1 ? mask : (1.0 - mask);
 }
 
 
@@ -502,7 +708,8 @@ ${getStencilPassCode(remainingBlendShader)}
             const shaderLayer = shaderMap[shaderLayerId];
             const shaderLayerConfig = shaderLayer.getConfig();
             const slot = shaderLayer.__renderSlot;
-            const opacityModifier = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
+            const opacityModifierBase = shaderLayer.opacity ? `opacity * ${shaderLayer.opacity.sample()}` : "opacity";
+            const opacityModifier = `(${opacityModifierBase}) * inspector_layer_alpha(${slot})`;
 
             execution += `\n    // ${shaderLayer.uid}\n`;
 
@@ -584,6 +791,8 @@ ${getStencilPassCode(shaderLayer)}
         this._stencilLocation = gl.getUniformLocation(program, "u_stencilTextures");
 
         this._tiInfoLoc = gl.getUniformLocation(program, "u_tiInfo");
+        this._inspectorALocation = gl.getUniformLocation(program, "u_inspectorA");
+        this._inspectorBLocation = gl.getUniformLocation(program, "u_inspectorB");
         this.vao = gl.createVertexArray();
 
         // TODO: is this refreshing logic necessary? if enableing this, delete the above refresh, not needed, will be done at use(...)
@@ -644,6 +853,29 @@ ${getStencilPassCode(shaderLayer)}
         gl.bindTexture(gl.TEXTURE_2D_ARRAY, renderOutput.stencil);
         gl.uniform1i(this._stencilLocation, 1);
 
+        const inspectorState = this.context.renderer.getInspectorState();
+        const inspectorMode = {
+            "reveal-inside": 1,
+            "reveal-outside": 2,
+            "lens-zoom": 3
+        }[inspectorState.mode] || 0;
+
+        gl.uniform4f(
+            this._inspectorALocation,
+            inspectorState.centerPx.x,
+            inspectorState.centerPx.y,
+            inspectorState.radiusPx,
+            inspectorState.featherPx
+        );
+
+        gl.uniform4f(
+            this._inspectorBLocation,
+            inspectorState.enabled ? 1 : 0,
+            inspectorMode,
+            inspectorState.shaderSplitIndex,
+            inspectorState.lensZoom
+        );
+
         this.atlas.bind(gl.TEXTURE2, 2);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -694,6 +926,160 @@ ${getStencilPassCode(shaderLayer)}
         this._tiledImageCount = tiledImageCount;
     }
 };
+
+$.FlexRenderer.WebGL20.InspectorCompositorProgram = class extends $.FlexRenderer.WGLProgram {
+    constructor(context, gl, atlas) {
+        super(context, gl, atlas);
+        this._width = 1;
+        this._height = 1;
+    }
+
+    _getVertexShaderSource() {
+        return `#version 300 es
+precision mediump float;
+
+out vec2 v_texture_coords;
+
+const vec2 viewport[4] = vec2[4](
+    vec2(-1.0,  1.0),
+    vec2(-1.0, -1.0),
+    vec2( 1.0,  1.0),
+    vec2( 1.0, -1.0)
+);
+
+void main() {
+    vec2 clip = viewport[gl_VertexID];
+    v_texture_coords = clip * 0.5 + 0.5;
+    gl_Position = vec4(clip, 0.0, 1.0);
+}
+`;
+    }
+
+    _getFragmentShaderSource() {
+        return `#version 300 es
+precision mediump float;
+precision mediump int;
+precision mediump sampler2D;
+
+uniform sampler2D u_fullTexture;
+uniform vec2 u_viewportSize;
+uniform vec2 u_lensCenterPx;
+uniform float u_radiusPx;
+uniform float u_featherPx;
+uniform float u_lensZoom;
+uniform int u_mode;
+uniform int u_enabled;
+
+in vec2 v_texture_coords;
+out vec4 final_color;
+
+float inspector_mask(vec2 fragPx) {
+  float feather = max(u_featherPx, 0.0001);
+  float distPx = distance(fragPx, u_lensCenterPx);
+  float inner = max(u_radiusPx - feather, 0.0);
+  float outer = max(u_radiusPx + feather, feather);
+  return 1.0 - smoothstep(inner, outer, distPx);
+}
+
+vec2 inspector_lens_uv(vec2 uv) {
+  vec2 viewportSize = max(u_viewportSize, vec2(1.0));
+  vec2 centerUv = u_lensCenterPx / viewportSize;
+  float zoom = max(u_lensZoom, 1.0);
+  return clamp(centerUv + (uv - centerUv) / zoom, vec2(0.0), vec2(1.0));
+}
+
+void main() {
+  vec4 fullColor = texture(u_fullTexture, v_texture_coords);
+  vec4 result = fullColor;
+
+  if (u_enabled == 1 && u_mode == 3) {
+      float mask = inspector_mask(gl_FragCoord.xy);
+      vec4 lensColor = texture(u_fullTexture, inspector_lens_uv(v_texture_coords));
+      result = mix(fullColor, lensColor, mask);
+  }
+
+  final_color = result;
+}
+`;
+    }
+
+    build() {
+        this.vertexShader = this._getVertexShaderSource();
+        this.fragmentShader = this._getFragmentShaderSource();
+    }
+
+    created(width, height) {
+        const gl = this.gl;
+        const program = this.webGLProgram;
+        this._width = width;
+        this._height = height;
+        this._fullTextureLoc = gl.getUniformLocation(program, 'u_fullTexture');
+        this._viewportSizeLoc = gl.getUniformLocation(program, 'u_viewportSize');
+        this._lensCenterLoc = gl.getUniformLocation(program, 'u_lensCenterPx');
+        this._radiusLoc = gl.getUniformLocation(program, 'u_radiusPx');
+        this._featherLoc = gl.getUniformLocation(program, 'u_featherPx');
+        this._lensZoomLoc = gl.getUniformLocation(program, 'u_lensZoom');
+        this._modeLoc = gl.getUniformLocation(program, 'u_mode');
+        this._enabledLoc = gl.getUniformLocation(program, 'u_enabled');
+        this.vao = gl.createVertexArray();
+    }
+
+    load() {
+    }
+
+    _modeToInt(mode) {
+        return {
+            'reveal-inside': 1,
+            'reveal-outside': 2,
+            'lens-zoom': 3,
+        }[mode] || 0;
+    }
+
+    use(renderOutput, renderArray, options = {}) {
+        const gl = this.gl;
+        const fullTarget = options.fullTarget;
+        const inspectorState = options.inspectorState || {};
+
+        if (!fullTarget || !fullTarget.texture) {
+            throw new Error('Inspector compositor requires a full color target.');
+        }
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, options.framebuffer === undefined ? null : options.framebuffer);
+        gl.bindVertexArray(this.vao);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, fullTarget.texture);
+        gl.uniform1i(this._fullTextureLoc, 0);
+
+        gl.uniform2f(this._viewportSizeLoc, this._width, this._height);
+        gl.uniform2f(this._lensCenterLoc, inspectorState.centerPx ? inspectorState.centerPx.x || 0 : 0, inspectorState.centerPx ? inspectorState.centerPx.y || 0 : 0);
+        gl.uniform1f(this._radiusLoc, inspectorState.radiusPx || 0);
+        gl.uniform1f(this._featherLoc, inspectorState.featherPx || 0);
+        gl.uniform1f(this._lensZoomLoc, inspectorState.lensZoom || 1);
+        gl.uniform1i(this._modeLoc, this._modeToInt(inspectorState.mode));
+        gl.uniform1i(this._enabledLoc, inspectorState.enabled ? 1 : 0);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        gl.bindVertexArray(null);
+
+        return {
+            texture: fullTarget.texture,
+        };
+    }
+
+    destroy() {
+        this.gl.deleteVertexArray(this.vao);
+    }
+
+    setDimensions(x, y, width, height) {
+        this._width = width;
+        this._height = height;
+    }
+};
+
 
 $.FlexRenderer.WebGL20.FirstPassProgram = class extends $.FlexRenderer.WGLProgram {
 
