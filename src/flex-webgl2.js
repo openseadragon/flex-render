@@ -194,6 +194,11 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 
+    /**
+     * Reference implementation of the backend offscreen second-pass contract.
+     * This renders the normal second pass exactly as it would appear on screen,
+     * but into a reusable color target.
+     */
     renderSecondPassToTexture(renderArray, options = {}) {
         const width = options.width || this.renderer.canvas.width || this.gl.drawingBufferWidth;
         const height = options.height || this.renderer.canvas.height || this.gl.drawingBufferHeight;
@@ -216,6 +221,11 @@ $.FlexRenderer.WebGL20 = class extends $.FlexRenderer.WebGLImplementation {
         return target;
     }
 
+    /**
+     * Reference implementation of the phase-1 inspector compositor contract.
+     * Only `lens-zoom` is routed here by the outer renderer. Reveal/A-B behavior
+     * stays inside the normal second-pass shader.
+     */
     processSecondPassWithInspector(renderArray, options = undefined) {
         const width = this.renderer.canvas.width || this.gl.drawingBufferWidth;
         const height = this.renderer.canvas.height || this.gl.drawingBufferHeight;
@@ -1648,8 +1658,9 @@ void main() {
 
     _createOffscreenTexture(name, width, height, layerCount, filter) {
         const gl = this.gl;
+        const previousActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE);
 
-            layerCount = Math.max(layerCount, 1);
+        layerCount = Math.max(layerCount, 1);
 
         let texRef = this[name];
         if (texRef) {
@@ -1663,6 +1674,8 @@ void main() {
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, filter);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+        gl.activeTexture(previousActiveTexture);
     }
 };
 

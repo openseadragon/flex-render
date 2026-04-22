@@ -211,12 +211,12 @@ for (int i = 1; i < COLORMAP_ARRAY_LEN_${this.MAX_SAMPLES} + 1; i++) {
 
     toHtml(classes = "", css = "") {
         if (!this.params.interactive) {
-            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow p-1 rounded-2"
-style="width: 60%;">${this.load(this.params.default)}</span></div>`;
+            const display = `<span id="${this.id}" class="er-control__display er-control__display--colormap"${$.FlexRenderer.UIControls.styleAttr(css)}>${this.load(this.params.default)}</span>`;
+            return $.FlexRenderer.UIControls.renderControl("colormap", this.params.title, display, classes);
         }
 
-        return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><select id="${this.id}" class="form-control text-white-shadow"
-style="width: 60%;"></select></div>`;
+        const input = `<select id="${this.id}" class="er-control__input er-control__input--colormap"${$.FlexRenderer.UIControls.styleAttr(css)}></select>`;
+        return $.FlexRenderer.UIControls.renderControl("colormap", this.params.title, input, classes);
     }
 
     define() {
@@ -347,12 +347,12 @@ $.FlexRenderer.UIControls.registerClass("custom_colormap", class extends $.FlexR
 
     toHtml(classes = "", css = "") {
         if (!this.params.interactive) {
-            return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="text-white-shadow rounded-2 p-0 d-inline-block"
-style="width: 60%;">&emsp;</span></div>`;
+            const display = `<span id="${this.id}" class="er-control__display er-control__display--custom-colormap"${$.FlexRenderer.UIControls.styleAttr(css)}>&emsp;</span>`;
+            return $.FlexRenderer.UIControls.renderControl("custom-colormap", this.params.title, display, classes);
         }
 
-        return `<div class="${classes}" style="${css}"><span> ${this.params.title}</span><span id="${this.id}" class="form-control text-white-shadow p-0 d-inline-block"
-style="width: 60%;"></span></div>`;
+        const display = `<span id="${this.id}" class="er-control__display er-control__display--custom-colormap"${$.FlexRenderer.UIControls.styleAttr(css)}></span>`;
+        return $.FlexRenderer.UIControls.renderControl("custom-colormap", this.params.title, display, classes);
     }
 
     get supports() {
@@ -544,7 +544,7 @@ return masked * bigger / actualLength;
                         /* eslint-disable eqeqeq */
                         this.style.background = (!_this.params.inverted && _this.mask[idx] > 0) ||
                             (_this.params.inverted && _this.mask[idx] == 0) ?
-                                "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
+                                "oklch(var(--er))" : "";
                         _this.owner.invalidate();
                         _this._ignoreNextClick = idx !== 0 && idx !== _this.sampleSize - 1;
                         _this.changed("mask", _this.mask, _this.mask, _this);
@@ -600,7 +600,7 @@ return masked * bigger / actualLength;
             /* eslint-disable eqeqeq */
             pips[i].style.background = (!this.params.inverted && this.mask[i] > 0) ||
                 (this.params.inverted && this.mask[i] == 0) ?
-                "var(--color-icon-danger)" : "var(--color-icon-tertiary)";
+                "oklch(var(--er))" : "";
             pips[i].dataset.index = (i).toString();
         }
     }
@@ -653,8 +653,8 @@ return masked * bigger / actualLength;
         if (!this.params.interactive) {
             return "";
         }
-        return `<div style="${css}" class="${classes}"><span>${this.params.title}: </span><div id="${this.id}" style="height: 9px;
-margin-left: 5px; width: 60%; display: inline-block"></div></div>`;
+        const slider = `<div id="${this.id}" class="er-control__widget er-control__widget--advanced-slider"${$.FlexRenderer.UIControls.styleAttr(`height: 9px; display: inline-block;${css}`)}></div>`;
+        return $.FlexRenderer.UIControls.renderControl("advanced-slider", this.params.title, slider, classes);
     }
 
     define() {
@@ -767,9 +767,9 @@ $.FlexRenderer.UIControls.TextArea = class extends $.FlexRenderer.UIControls.ICo
 
     toHtml(classes = "", css = "") {
         let disabled = this.params.interactive ? "" : "disabled";
-        let title = this.params.title ? `<span style="height: 54px;">${this.params.title}: </span>` : "";
-        return `<div class="${classes}">${title}<textarea id="${this.id}" class="form-control"
-style="width: 100%; display: block; resize: vertical; ${css}" ${disabled} placeholder="${this.params.placeholder}"></textarea></div>`;
+        const textarea = `<textarea id="${this.id}" class="er-control__input er-control__input--textarea"
+${$.FlexRenderer.UIControls.styleAttr(`width: 100%; display: block; resize: vertical; ${css}`)} ${disabled} placeholder="${this.params.placeholder}"></textarea>`;
+        return $.FlexRenderer.UIControls.renderControl("text-area", this.params.title, textarea, classes);
     }
 
     define() {
@@ -860,8 +860,12 @@ $.FlexRenderer.UIControls.Button = class extends $.FlexRenderer.UIControls.ICont
 
     toHtml(classes = "", css = "") {
         let disabled = this.params.interactive ? "" : "disabled";
-        css = `style="${css ? css : ""}float: right;"`;
-        return `<button id="${this.id}" ${css} class="${classes}" ${disabled}></button>`;
+        const button = `<button id="${this.id}" class="er-control__button er-control__button--action"${$.FlexRenderer.UIControls.styleAttr(`${css ? css : ""}float: right;`)} ${disabled}></button>`;
+        return $.FlexRenderer.UIControls.renderControl("button", this.params.title, button, classes);
+    }
+
+    get layoutColumns() {
+        return 1;
     }
 
     define() {
@@ -1069,13 +1073,14 @@ $.FlexRenderer.UIControls.Image = class extends $.FlexRenderer.IAtlasTextureCont
 
     toHtml(classes = "", css = "") {
         const disabled = this.params.interactive ? "" : "disabled";
-        return `<span>${this.params.title}</span>
-        <div id="${this.id}_root" class="${classes}" style="${css}; position: relative;">
-            <div class="text-xs opacity-70">The atlas starts empty. Upload an image to create a new atlas entry.</div>
-            Selected: <input type="number" id="${this.id}_number" min="-1" step="1" ${disabled}><br>
-            <input type="file" id="${this.id}_file" accept="${this.params.accept}" ${disabled}><br>
-            <button id="${this.id}_button" ${disabled}>Upload Image</button>
+        const body = `
+        <div id="${this.id}_root" class="er-control__widget er-control__widget--image"${$.FlexRenderer.UIControls.styleAttr(`${css}; position: relative;`)}>
+            <div class="er-control__hint er-control__hint--image">The atlas starts empty. Upload an image to create a new atlas entry.</div>
+            <label class="er-control__row er-control__row--image-number">Selected: <input type="number" id="${this.id}_number" class="er-control__input er-control__input--image-number" min="-1" step="1" ${disabled}></label>
+            <input type="file" id="${this.id}_file" class="er-control__input er-control__input--image-file" accept="${this.params.accept}" ${disabled}>
+            <button id="${this.id}_button" class="er-control__button er-control__button--image-upload" ${disabled}>Upload Image</button>
         </div>`;
+        return $.FlexRenderer.UIControls.renderControl("image", this.params.title, body, classes);
     }
 
     get supports() {
@@ -2168,32 +2173,35 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
 
     toHtml(classes = "", css = "") {
         const disabled = this.params.interactive ? "" : "disabled";
-
-        return `<div id="${this.id}_root" class="${classes}" style="${css}; position: relative;">
-<div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-    <span>${this.params.title}</span>
-    <button id="${this.id}_trigger" type="button" ${disabled}
+        const body = `<div id="${this.id}_root" class="er-control__widget er-control__widget--icon"${$.FlexRenderer.UIControls.styleAttr(`${css}; position: relative;`)}>
+<div class="er-control__toolbar er-control__toolbar--icon" style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+    <button id="${this.id}_trigger" type="button" class="er-control__button er-control__button--icon-trigger" ${disabled}
         style="width: 52px; height: 52px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #ccc; border-radius: 8px; background: #fff; cursor: pointer;">
-        <span id="${this.id}_preview" style="display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%;">?</span>
+        <span id="${this.id}_preview" class="er-control__preview er-control__preview--icon" style="display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%;">?</span>
     </button>
 </div>
-<div id="${this.id}_popup"
+<div id="${this.id}_popup" class="er-control__popup er-control__popup--icon"
      style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: min(420px, 90vw); padding: 12px; border: 1px solid #c9d5ca; border-radius: 12px; background: #fdfefd; box-shadow: 0 16px 36px rgba(18, 32, 24, 0.12);">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+    <div class="er-control__popup-header er-control__popup-header--icon" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
         <strong style="font-size: 13px;">Icon picker</strong>
-        <button id="${this.id}_close" type="button" ${disabled}>Close</button>
+        <button id="${this.id}_close" type="button" class="er-control__button er-control__button--icon-close" ${disabled}>Close</button>
     </div>
-    <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; align-items: end;">
-        <input type="text" id="${this.id}_query" placeholder="Search icons, aliases, glyphs" style="width: 100%;" ${disabled}>
-        <label style="display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #4e5d52;">
+    <div class="er-control__search er-control__search--icon" style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 10px; align-items: end;">
+        <input type="text" id="${this.id}_query" class="er-control__input er-control__input--icon-query" placeholder="Search icons, aliases, glyphs" style="width: 100%;" ${disabled}>
+        <label class="er-control__color-picker er-control__color-picker--icon" style="display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #4e5d52;">
             <span>Color</span>
-            <input type="color" id="${this.id}_color" value="${this._decodeStoredValue(this.encodedValue || this.params.default).color}" style="width: 44px; height: 38px; padding: 2px;" ${disabled}>
+            <input type="color" id="${this.id}_color" class="er-control__input er-control__input--icon-color" value="${this._decodeStoredValue(this.encodedValue || this.params.default).color}" style="width: 44px; height: 38px; padding: 2px;" ${disabled}>
         </label>
     </div>
-    <div id="${this.id}_results"
+    <div id="${this.id}_results" class="er-control__results er-control__results--icon"
          style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; max-height: 360px; overflow: auto;"></div>
 </div>
 </div>`;
+        return $.FlexRenderer.UIControls.renderControl("icon", this.params.title, body, classes);
+    }
+
+    get layoutColumns() {
+        return 1;
     }
 
     get supports() {
@@ -2222,4 +2230,3 @@ $.FlexRenderer.UIControls.Icon = class extends $.FlexRenderer.IAtlasTextureContr
 $.FlexRenderer.UIControls.registerClass("icon", $.FlexRenderer.UIControls.Icon);
 
 })(OpenSeadragon);
-

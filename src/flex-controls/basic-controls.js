@@ -183,6 +183,31 @@ $.FlexRenderer.UIControls = class {
         //     console.warn(`Skipping UI control '${type}': does not inherit from $.FlexRenderer.UIControls.IControl.`);
         // }
     }
+
+    static joinClasses(...values) {
+        return values.filter(value => typeof value === "string" && value.trim()).join(" ").trim();
+    }
+
+    static styleAttr(css = "") {
+        return css && String(css).trim() ? ` style="${css}"` : "";
+    }
+
+    static renderTitle(title, type) {
+        if (!title) {
+            return "";
+        }
+        return `<span class="er-control__title er-control__title--${type}">${title}</span>`;
+    }
+
+    static renderControl(type, title, bodyHtml, classes = "", columns = undefined, extraAttrs = "") {
+        const resolvedColumns = Number(columns) || (title ? 2 : 1);
+        return `<div class="${this.joinClasses("er-control", `er-control--${type}`, classes)}" data-columns="${resolvedColumns}" ${extraAttrs}>${this.renderTitle(title, type)}<div class="er-control__body
+  er-control__body--${type}">${bodyHtml}</div></div>`;
+    }
+
+    static renderInput(inputTag, type, uniqueId, attrs = "", css = "") {
+        return `<${inputTag} id="${uniqueId}" class="er-control__input er-control__input--${type}"${attrs}${this.styleAttr(css)}>`;
+    }
 };
 
 // Definitions of possible controls' types, simple functionalities:
@@ -193,9 +218,9 @@ $.FlexRenderer.UIControls._items = {
         },
         // returns string corresponding to html code for injection
         html: function(uniqueId, params, classes = "", css = "") {
-            let title = params.title ? `<span> ${params.title}</span>` : "";
-            return `${title}<input class="${classes}" style="${css}" min="${params.min}" max="${params.max}"
-step="${params.step}" type="number" id="${uniqueId}">`;
+            const input = `<input class="er-control__input er-control__input--number" min="${params.min}" max="${params.max}"
+step="${params.step}" type="number" id="${uniqueId}"${$.FlexRenderer.UIControls.styleAttr(css)}>`;
+            return $.FlexRenderer.UIControls.renderControl("number", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1f";
@@ -232,9 +257,8 @@ step="${params.step}" type="number" id="${uniqueId}">`;
             return {title: "Range", interactive: true, default: 0, min: 0, max: 100, step: 1};
         },
         html: function(uniqueId, params, classes = "", css = "") {
-            let title = params.title ? `<span> ${params.title}</span>` : "";
-            return `${title}<input type="range" style="${css}"
-class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}">`;
+            const input = `<input type="range" class="er-control__input er-control__input--range" min="${params.min}" max="${params.max}" step="${params.step}" id="${uniqueId}"${$.FlexRenderer.UIControls.styleAttr(css)}>`;
+            return $.FlexRenderer.UIControls.renderControl("range", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1f";
@@ -271,8 +295,8 @@ class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}"
             return { title: "Color", interactive: true, default: "#fff900" };
         },
         html: function(uniqueId, params, classes = "", css = "") {
-            let title = params.title ? `<span> ${params.title}</span>` : "";
-            return `${title}<input type="color" id="${uniqueId}" style="${css}" class="${classes}">`;
+            const input = `<input type="color" id="${uniqueId}" class="er-control__input er-control__input--color"${$.FlexRenderer.UIControls.styleAttr(css)}>`;
+            return $.FlexRenderer.UIControls.renderControl("color", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform3fv";
@@ -315,11 +339,11 @@ class="${classes}" min="${params.min}" max="${params.max}" step="${params.step}"
             return { title: "Checkbox", interactive: true, default: true };
         },
         html: function(uniqueId, params, classes = "", css = "") {
-            let title = params.title ? `<span> ${params.title}</span>` : "";
             let value = this.decode(params.default) ? "checked" : "";
             //note a bit dirty, but works :) - we want uniform access to 'value' property of all inputs
-            return `${title}<input type="checkbox" style="${css}" id="${uniqueId}" ${value}
-class="${classes}" onchange="this.value=this.checked; return true;">`;
+            const input = `<input type="checkbox" id="${uniqueId}" ${value}
+class="er-control__input er-control__input--bool" onchange="this.value=this.checked; return true;"${$.FlexRenderer.UIControls.styleAttr(css)}>`;
+            return $.FlexRenderer.UIControls.renderControl("bool", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1i";
@@ -359,8 +383,6 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
             };
         },
         html: function(uniqueId, params, classes = "", css = "") {
-            const title = params.title ? `<span>${params.title}</span>` : "";
-
             let options = [];
             if (Array.isArray(params.options)) {
                 options = params.options.map(opt => {
@@ -385,7 +407,8 @@ class="${classes}" onchange="this.value=this.checked; return true;">`;
                 return `<option value="${opt.value}"${selected}>${opt.label}</option>`;
             }).join("");
 
-            return `${title} <select id="${uniqueId}" class="${classes}" style="${css}">${optionHtml}</select>`;
+            const input = `<select id="${uniqueId}" class="er-control__input er-control__input--select"${$.FlexRenderer.UIControls.styleAttr(css)}>${optionHtml}</select>`;
+            return $.FlexRenderer.UIControls.renderControl("select", params.title, input, classes, params.title ? 2 : 1);
         },
         glUniformFunName: function() {
             return "uniform1i";
@@ -831,6 +854,10 @@ $.FlexRenderer.UIControls.IControl = class IControl {
             this.__onchange[event](value, encodedValue, context);
         }
 
+        if (this._suppressVisualizationChanged) {
+            return;
+        }
+
         this.owner.webglContext.renderer.notifyVisualizationChanged({
             reason: "control-change",
             shaderId: this.owner.id,
@@ -1032,6 +1059,8 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
         params.title = "";
         this._c2 = new $.FlexRenderer.UIControls.SimpleUIControl(
             owner, name, webGLVariableName + "_2", params, $.FlexRenderer.UIControls.getUiElement('number'), "second-");
+        this._c1._suppressVisualizationChanged = true;
+        this._c2._suppressVisualizationChanged = true;
     }
 
     init() {
@@ -1066,7 +1095,9 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
             return "";
         }
 
-        const title = this._c1.params.title ? `<span>${this._c1.params.title}</span>` : "";
+        const titleHtml = this._c1.params.title
+            ? `<span class="er-control__title er-control__title--slider-with-input">${this._c1.params.title}</span>`
+            : "";
 
         const rangeHtml = $.FlexRenderer.UIControls.getUiElement("range").html(
             this._c1.id,
@@ -1082,7 +1113,17 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
             css
         );
 
-        return `${title}${rangeHtml}${numberHtml}`;
+        return [
+            `<div class="er-control er-control--slider-with-input" data-columns="${this.layoutColumns}">`,
+            titleHtml,
+            `<div class="er-control__body er-control__body--slider-with-input">`,
+            rangeHtml,
+            `</div>`,
+            `<div class="er-control__aux er-control__aux--slider-with-input">`,
+            numberHtml,
+            `</div>`,
+            `</div>`
+        ].join("");
     }
 
     get layoutColumns() {

@@ -51,6 +51,34 @@
      */
 
     /**
+     * @typedef {Object} InspectorState
+     * @property {boolean} enabled master switch for inspector logic
+     * @property {"reveal-inside"|"reveal-outside"|"lens-zoom"} mode interaction mode
+     * @property {{x: number, y: number}} centerPx inspector center in canvas pixel space
+     * @property {number} radiusPx inspector radius in canvas pixels
+     * @property {number} featherPx soft edge width in canvas pixels
+     * @property {number} lensZoom magnification used by lens mode, clamped to >= 1
+     * @property {number} shaderSplitIndex first shader slot affected by reveal modes
+     */
+
+    /**
+     * @typedef {Object} InspectorStateUpdateOptions
+     * @property {boolean} [notify=true] emit the `inspector-change` event
+     * @property {boolean} [redraw=true] request a redraw after the state change
+     * @property {string} [reason="set-inspector-state"] semantic reason included in the emitted event
+     */
+
+    /**
+     * @typedef {Object} SecondPassTextureOptions
+     * @property {GLint|null} [framebuffer] optional framebuffer override for the final draw call
+     * @property {Object|string} [target] backend-owned render target object or stable target key
+     * @property {string} [targetKey] stable target key used when `target` is omitted
+     * @property {number} [width] target width in physical pixels
+     * @property {number} [height] target height in physical pixels
+     * @property {number[]} [clearColor=[0, 0, 0, 0]] RGBA color used when rendering an empty second pass
+     */
+
+    /**
      * WebGL Renderer for OpenSeadragon.
      *
      * Renders in two passes:
@@ -288,7 +316,14 @@
         }
 
         /**
-         * Call to second-pass draw
+         * Execute the second pass for the already prepared first-pass result.
+         *
+         * Responsibility split:
+         * - the renderer owns inspector state and decides whether the active inspector mode
+         *   can be executed inline in the normal second pass
+         * - reveal modes stay in the normal second-pass program
+         * - lens mode may delegate to the backend-specific inspector compositor path
+         *
          * @param {SPRenderPackage[]} renderArray
          * @param {RenderOptions|undefined} options
          * @return {RenderOutput}
@@ -548,14 +583,14 @@
             });
 
             try {
-                // Construct needs valid reference
                 this._shaders[id] = shader;
                 shader.construct();
+                return shader;
             } catch (e) {
                 delete this._shaders[id];
+                console.error(`Failed to construct shader '${id}' (${shaderConfig.type}).`, e, shaderConfig);
+                return undefined;
             }
-
-            return shader;
         }
 
         getAllShaders() {
@@ -797,6 +832,16 @@
             }, payload));
         }
 
+        /**
+         * Normalize inspector state to the canonical backend-agnostic shape.
+         *
+         * Backends must consume this logical state, not an implementation-specific variant.
+         * The values are defined in canvas pixel space so WebGL, WebGPU, or CPU implementations
+         * can produce the same visual result.
+         *
+         * @param {Partial<InspectorState>|undefined} state
+         * @return {InspectorState}
+         */
         static normalizeInspectorState(state = undefined) {
             const defaults = {
                 enabled: false,
@@ -833,6 +878,17 @@
             return normalized;
         }
 
+        /**
+         * Update the canonical inspector state stored by the renderer.
+         *
+         * This method is the public write API for all backends. It does not perform rendering
+         * itself; it stores normalized state, emits `inspector-change`, and optionally triggers
+         * a redraw so the active backend can consume the new state during the next second pass.
+         *
+         * @param {Partial<InspectorState>|undefined} state
+         * @param {InspectorStateUpdateOptions} [options={}]
+         * @return {InspectorState}
+         */
         setInspectorState(state = undefined, options = {}) {
             const previous = this.getInspectorState();
             this._inspectorState = this.constructor.normalizeInspectorState(state);
@@ -852,16 +908,38 @@
             return this.getInspectorState();
         }
 
+        /**
+         * Return a defensive copy of the current canonical inspector state.
+         * Backends should read inspector state through this method instead of caching mutable references.
+         *
+         * @return {InspectorState}
+         */
         getInspectorState() {
             return $.extend(true, {}, this._inspectorState || this.constructor.normalizeInspectorState());
         }
 
+        /**
+         * Reset the inspector to the normalized disabled state.
+         *
+         * @param {InspectorStateUpdateOptions} [options={}]
+         * @return {InspectorState}
+         */
         clearInspectorState(options = {}) {
             return this.setInspectorState(undefined, $.extend(true, {
                 reason: 'clear-inspector-state'
             }, options));
         }
 
+        /**
+         * Reuse the current first-pass result and render the second pass into an offscreen target.
+         *
+         * This is the public contract used by features that need a texture copy of the composed
+         * second pass. The renderer delegates the target management details to the active backend.
+         *
+         * @param {SPRenderPackage[]} renderArray
+         * @param {SecondPassTextureOptions} [options={}]
+         * @return {Object}
+         */
         renderSecondPassToTexture(renderArray, options = {}) {
             if (!this.webglContext || typeof this.webglContext.renderSecondPassToTexture !== 'function') {
                 throw new Error('Active WebGL implementation does not support second-pass texture targets.');

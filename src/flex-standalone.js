@@ -717,15 +717,22 @@
 
         runtime.overrideConfigureAll = async function(shaders, shaderOrder = undefined) {
             this.renderer.deleteShaders();
+            this.renderer.__firstPassResult = null;
             if (!shaders) {
+                this.renderer.setShaderLayerOrder([]);
                 return;
             }
 
-            for (const shaderId in shaders) {
-                this.renderer.createShaderLayer(shaderId, shaders[shaderId], true);
+            const normalized = $.FlexRenderer.normalizeShaderMap(
+                $.extend(true, {}, shaders),
+                { source: "standalone-runtime" }
+            ) || {};
+
+            for (const shaderId in normalized) {
+                this.renderer.createShaderLayer(shaderId, normalized[shaderId], false);
             }
 
-            this.renderer.setShaderLayerOrder(shaderOrder || Object.keys(shaders));
+            this.renderer.setShaderLayerOrder(shaderOrder || Object.keys(normalized));
             this.renderer.registerProgram(null, this.renderer.webglContext.secondPassProgramKey);
         };
 
@@ -766,6 +773,11 @@
                 if (configuration) {
                     await this.overrideConfigureAll(configuration);
                 }
+
+                const gl = this.renderer.gl;
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.clearColor(1.0, 1.0, 1.0, 1.0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
 
                 this._renderFirstPass();
 

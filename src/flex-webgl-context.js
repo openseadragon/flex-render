@@ -1,7 +1,13 @@
 (function($) {
     /**
      * @interface OpenSeadragon.FlexRenderer.WebGLImplementation
-     * Interface for the WebGL rendering implementation which can run on various GLSL versions.
+     * Backend rendering contract used by `FlexRenderer`.
+     *
+     * Despite the historical name, this interface documents responsibilities that any GPU backend
+     * is expected to match, including future WebGPU implementations. The concrete backend owns GPU
+     * resources and shader programs. The outer renderer owns normalized inspector state, shader
+     * ordering, and the decision of whether inspector behavior stays inline in the second pass or
+     * is delegated to a backend-specific compositor path.
      */
     $.FlexRenderer.WebGLImplementation = class {
         /**
@@ -183,25 +189,45 @@
         }
 
         /**
-         * Reuse first pass state to render second pass into a texture.
-         * @param renderArray the first pass state
-         * @param options
-         * @param [options.target] the target texture to render to
-         * @param [options.width]
-         * @param [options.height]
+         * Reuse the current first-pass result and render the normal second pass into an offscreen target.
+         *
+         * Contract:
+         * - consumes the same `renderArray` that would be passed to `secondPassProcessData(...)`
+         * - must not mutate renderer-owned inspector state
+         * - should render the normal second-pass composition, not apply special lens logic here
+         * - returns a backend-owned target object that can later be consumed by compositor logic
+         *
+         * @param {SPRenderPackage[]} renderArray second-pass draw packages
+         * @param {Object} [options={}]
+         * @param {Object|string} [options.target] backend-owned render target object or stable target key
+         * @param {string} [options.targetKey] stable target key used when `target` is omitted
+         * @param {number} [options.width] target width in physical pixels
+         * @param {number} [options.height] target height in physical pixels
+         * @param {number[]} [options.clearColor] RGBA used when `renderArray` is empty
+         * @return {Object}
          */
         renderSecondPassToTexture(renderArray, options = {}) {
             throw("$.FlexRenderer.WebGLImplementation::renderSecondPassToTexture() must be implemented!");
         }
 
         /**
-         * Reuse first pass state to render inspector pass pass instead of normal second pass.
-         * The inspector is a special mode where user mouse position controls the shown area. The outer renderer
-         * therefore gets second pass output via renderSecondPassToTexture and later combines it with the
-         * first pass output again here.
-         * @param renderArray
-         * @param options
-         * @param [options.framebuffer]
+         * Execute the backend-specific inspector compositor path for modes that cannot be expressed
+         * inline in the normal second pass.
+         *
+         * Phase-1 contract:
+         * - this hook is used only for `lens-zoom`
+         * - reveal/A-B behavior must stay inside the normal second-pass program
+         * - the backend should render the full second pass to an offscreen target and then run a
+         *   cheap compositor over that full result
+         * - no base/alternate texture semantics are part of the public contract
+         *
+         * The backend must read the canonical state from `renderer.getInspectorState()` and produce
+         * the same visible result as the reference WebGL2 implementation for `lens-zoom`.
+         *
+         * @param {SPRenderPackage[]} renderArray second-pass draw packages
+         * @param {Object} [options={}]
+         * @param {GLint|null} [options.framebuffer]
+         * @return {RenderOutput|Object}
          */
         processSecondPassWithInspector(renderArray, options = {}) {
             throw("$.FlexRenderer.WebGLImplementation::processSecondPassWithInspector() must be implemented!");

@@ -5,6 +5,13 @@ where the basis for this rendering engine was developed.
 
 See it in action and get started using it at [https://openseadragon.github.io/][openseadragon].
 
+Additional implementation notes:
+
+- [OFFSCREEN.md](./OFFSCREEN.md) documents offscreen rendering helpers
+- [src/EVENTS.md](./src/EVENTS.md) documents semantic and lifecycle events
+- [INSPECTOR.md](./INSPECTOR.md) defines the backend-agnostic inspector contract used by WebGL2 and future backends
+- [STYLING.md](./STYLING.md) explains how to mount and theme renderer-generated control UI
+
 ## Usage
 
 OpenSeadragon v6.0+ is required to use this renderer. It is a drop-in replacement for the default OpenSeadragon drawer, which means you can use it as a regular OpenSeadragon drawer.
@@ -150,6 +157,34 @@ const viewer = OpenSeadragon({
 
 This mechanism is used by `time-series`: its `series` parameter can now contain either world indexes
 or lazy source descriptors resolved later by the drawer.
+
+### Inspector API
+
+The inspector is a renderer-owned second-pass feature with a backend-agnostic state shape.
+
+Application entry points:
+
+```js
+viewer.drawer.setInspectorState({
+    enabled: true,
+    mode: "reveal-inside",
+    centerPx: { x: 320, y: 180 },
+    radiusPx: 96,
+    featherPx: 16,
+    shaderSplitIndex: 1
+});
+```
+
+```js
+const state = viewer.drawer.renderer.getInspectorState();
+viewer.drawer.clearInspectorState();
+```
+
+Behavior contract:
+
+- `reveal-inside` and `reveal-outside` are executed inline in the normal second pass
+- `lens-zoom` may use a backend compositor path
+- the canonical state shape and backend responsibilities are defined in [INSPECTOR.md](./INSPECTOR.md)
 
 ### Shader Layers
 
@@ -298,6 +333,7 @@ Additional configurator debug pages are available under `test/demo/`:
 - `configurator-static-docs.html` renders the static shader/control documentation view.
 - `configurator-live-output.html` runs the interactive configurator and prints live config JSON.
 - `configurator-scheme.html` dumps the machine-readable configuration schema focused on usable JSON input: `ShaderConfig`, shader `params`, built-in `use_*` options, top-level and group `order` overrides, group `shaders`, typed UI-control config shapes, and reusable `controlTypedefs`.
+- `standalone-renderer.html` is a preset-driven standalone runtime test bench for switching synthetic inputs and trying multiple visualization configs without a viewer.
 
 ## Roadmap
 - Bugfixing & getting ready for the first release
