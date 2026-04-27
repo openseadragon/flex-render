@@ -959,8 +959,8 @@ $.FlexRenderer.UIControls.SimpleUIControl = class extends $.FlexRenderer.UIContr
                 // TODO: some elements do not have 'value' attribute, but 'checked' or 'selected' instead
                 node.value = this.encodedValue;
                 node.addEventListener('change', updater);
-            } else {
-                console.error('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
+            } else if (this.owner._renderer.htmlHandler) {
+                console.warn('$.FlexRenderer.UIControls.SimpleUIControl::init: HTML element with id =', this.id, 'not found! Cannot set event listener for the control.');
             }
         }
     }
@@ -1069,12 +1069,18 @@ $.FlexRenderer.UIControls.SliderWithInput = class extends $.FlexRenderer.UIContr
         this._c1.init();
         this._c2.init();
         this._c1.on("default", function(value, encoded, owner) {
-            document.getElementById(_this._c2.id).value = encoded;
+            const c2 = document.getElementById(_this._c2.id);
+            if (c2) {
+                c2.value = encoded;
+            }
             _this._c2.value = value;
             _this.changed("default", value, encoded, owner);
         }, true); //silently fail if registered
         this._c2.on("default", function(value, encoded, owner) {
-            document.getElementById(_this._c1.id).value = encoded;
+            const c1 = document.getElementById(_this._c1.id);
+            if (c1) {
+                c1.value = encoded;
+            }
             _this._c1.value = value;
             // Only C1 loads values to gpu, request change
             _this._c1._needsLoad = true;

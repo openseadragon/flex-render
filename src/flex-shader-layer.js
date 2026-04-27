@@ -204,6 +204,88 @@
         }
 
         /**
+         * One-line guidance: when should a caller pick this shader?
+         *
+         * `description()` is technical (what the shader does); `intent()` is "when to use it".
+         * Read by hosts (e.g. xOpat scripting / LLM driven layer construction) when picking
+         * a shader for a given dataset. Keep it generic — no use-case-specific recipes.
+         *
+         * Override per shader; the default returns `undefined`, in which case hosts treat
+         * "no info" as a safe fallback.
+         *
+         * @returns {String|undefined}
+         */
+        static intent() {
+            return undefined;
+        }
+
+        /**
+         * Data-shape hints. Tells the host whether this shader is appropriate for the
+         * source the user has loaded. Hosts match the returned `expects` against source
+         * metadata (e.g. channel count) to filter candidate shaders.
+         *
+         * Shape:
+         * {
+         *   dataKind: "scalar" | "multi-channel" | "rgb" | "mask" | "any",
+         *   channels?: number | "any",   // expected source channel count
+         *   requiresThreshold?: boolean  // true when behavior depends on threshold breaks
+         * }
+         *
+         * Override per shader; the default returns `undefined`.
+         *
+         * @returns {{dataKind?: string, channels?: number|string, requiresThreshold?: boolean}|undefined}
+         */
+        static expects() {
+            return undefined;
+        }
+
+        /**
+         * A minimal valid `params` object for a fresh layer of this shader. Hosts use it
+         * when building a "create from scratch" template so they don't have to invent
+         * values. Keep small — only controls that need a non-default value to render
+         * something sensible. If the shader declares `controlCouplings`, the returned
+         * object MUST satisfy them (it doubles as the canonical example).
+         *
+         * Override per shader; the default returns `undefined`.
+         *
+         * @returns {object|undefined}
+         */
+        static exampleParams() {
+            return undefined;
+        }
+
+        /**
+         * Declares relationships between controls that must hold true on every committed
+         * layer. Hosts use the returned entries for two purposes:
+         *  (a) tell the LLM the rule in plain English so it can construct compliant layers,
+         *  (b) validate submitted layers and reject violations with structured errors.
+         *
+         * Each entry:
+         * {
+         *   name: string,                                  // stable id, e.g. "colormap_class_count"
+         *   summary: string,                               // human-readable rule, shown to the LLM
+         *   controls: string[],                            // control keys involved
+         *   validate: (layer) => {                         // pure, fast, side-effect-free
+         *     ok: boolean,
+         *     expected?: Record<string, any>,              // what the coupling requires
+         *     actual?: Record<string, any>                 // what the layer currently has
+         *   }
+         * }
+         *
+         * The `validate` function is exposed at runtime via
+         * `ShaderConfigurator.getShaderCouplingValidators(shaderType)`; the schema model
+         * only ships `{name, summary, controls}` (JSON-serializable).
+         *
+         * Override per shader when controls are coupled; the default returns `undefined`.
+         * Returning `[]` is also accepted ("declared, but no couplings").
+         *
+         * @returns {Array<{name: string, summary: string, controls: string[], validate: Function}>|undefined}
+         */
+        static controlCouplings() {
+            return undefined;
+        }
+
+        /**
          * Declare the object for channel settings. One for each data source (NOT USED, ALWAYS RETURNS ARRAY OF ONE OBJECT; for backward compatibility the array is returned)
          * @returns {[channelSettings]}
          */

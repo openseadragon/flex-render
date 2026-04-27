@@ -499,7 +499,7 @@ in vec2 v_texture_coords;
 
 // OUTPUT VARIABLES
 
-out vec4 final_color;
+layout(location=0) out vec4 final_color;
 
 
 // GLOBAL VARIABLES
@@ -981,7 +981,7 @@ uniform int u_mode;
 uniform int u_enabled;
 
 in vec2 v_texture_coords;
-out vec4 final_color;
+layout(location=0) out vec4 final_color;
 
 float inspector_mask(vec2 fragPx) {
   float feather = max(u_featherPx, 0.0001);
@@ -1593,6 +1593,11 @@ void main() {
     }
 
     setDimensions(x, y, width, height, dataLayerCount, tiledImageCount) {
+        if (!width || !height || !dataLayerCount || !tiledImageCount) {
+            // Defer — GL resources will be reallocated when real dimensions arrive.
+            return;
+        }
+
         // Double swapping required else collisions
         this._createOffscreenTexture("colorTextureA", width, height, dataLayerCount, this.gl.LINEAR);
         // this._createOffscreenTexture("colorTextureB", width, height, dataLayerCount, this.gl.LINEAR);

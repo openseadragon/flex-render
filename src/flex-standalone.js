@@ -237,8 +237,96 @@
         throw new Error("Unsupported standalone input source.");
     }
 
+    function createStandaloneViewportHost(viewer) {
+        return {
+            navigator: null,
+            world: viewer.world,
+            drawer: {
+                canRotate: function() {
+                    return !!(viewer.drawer && typeof viewer.drawer.canRotate === "function" && viewer.drawer.canRotate());
+                }
+            },
+            forceRedraw: function() {},
+            raiseEvent: function() {},
+        };
+    }
+
+    function setStandaloneViewportRotation(viewport, viewer, degrees) {
+        if (typeof degrees !== "number") {
+            return;
+        }
+
+        if (viewport.degreesSpring) {
+            viewport.degreesSpring.resetTo(degrees);
+        }
+        if (viewport._oldDegrees !== undefined) {
+            viewport._oldDegrees = degrees;
+        }
+
+        viewport._setContentBounds(viewer.world.getHomeBounds(), viewer.world.getContentFactor());
+    }
+
+    function syncStandaloneViewportState(viewport, viewer, view, size) {
+        viewport._setContentBounds(viewer.world.getHomeBounds(), viewer.world.getContentFactor());
+
+        if (size && typeof size.x === "number" && typeof size.y === "number") {
+            viewport.resize(new $.Point(size.x, size.y), true);
+        }
+
+        if (view && view.bounds) {
+            viewport.fitBounds(view.bounds, true);
+        } else if (view) {
+            if (typeof view.zoom === "number") {
+                viewport.zoomTo(view.zoom, null, true);
+            }
+            if (view.center) {
+                viewport.panTo(view.center, true);
+            }
+        } else {
+            viewport.fitBounds(viewer.viewport.getBoundsNoRotate(true), true);
+        }
+
+        if (view && typeof view.rotation === "number") {
+            setStandaloneViewportRotation(viewport, viewer, view.rotation * 180 / Math.PI);
+        } else {
+            setStandaloneViewportRotation(viewport, viewer, viewer.viewport.getRotation(true));
+        }
+
+        if (view && typeof view.flipped === "boolean") {
+            viewport.setFlip(view.flipped);
+        } else {
+            viewport.setFlip(viewer.viewport.getFlip());
+        }
+
+        viewport.applyConstraints(true);
+    }
+
     $.makeStandaloneFlexDrawer = function(viewer) {
         const Drawer = OpenSeadragon.FlexDrawer;
+        const viewportHost = createStandaloneViewportHost(viewer);
+        const standaloneViewport = new $.Viewport({
+            containerSize: viewer.viewport.getContainerSize(),
+            springStiffness: viewer.springStiffness,
+            animationTime: viewer.animationTime,
+            minZoomImageRatio: viewer.minZoomImageRatio,
+            maxZoomPixelRatio: viewer.maxZoomPixelRatio,
+            visibilityRatio: viewer.visibilityRatio,
+            wrapHorizontal: viewer.wrapHorizontal,
+            wrapVertical: viewer.wrapVertical,
+            defaultZoomLevel: viewer.defaultZoomLevel,
+            minZoomLevel: viewer.minZoomLevel,
+            maxZoomLevel: viewer.maxZoomLevel,
+            viewer: viewportHost,
+            degrees: viewer.viewport.getRotation(true),
+            flipped: viewer.viewport.getFlip(),
+            overlayPreserveContentDirection: viewer.overlayPreserveContentDirection,
+            navigatorRotate: viewer.navigatorRotate,
+            homeFillsViewer: viewer.homeFillsViewer,
+            margins: viewer.viewportMargins,
+            silenceMultiImageWarnings: viewer.silenceMultiImageWarnings
+        });
+        viewportHost.viewport = standaloneViewport;
+        syncStandaloneViewportState(standaloneViewport, viewer);
 
         const options = $.extend(true, {}, viewer.drawerOptions[Drawer.prototype.getType()]);
         options.debug = false;
@@ -250,7 +338,7 @@
 
         const drawer = new Drawer({
             viewer:             viewer,
-            viewport:           viewer.viewport,
+            viewport:           standaloneViewport,
             element:            viewer.drawer.container,
             debugGridColor:     viewer.debugGridColor,
             options:            options
@@ -260,39 +348,37 @@
         const lock = () => mutex.lock();
         const unlock = () => mutex.unlock();
 
+        drawer._bindTiledImagesToViewport = function(tiledImages) {
+            const bindings = tiledImages.map(tiledImage => ({
+                tiledImage,
+                viewport: tiledImage.viewport
+            }));
+            for (const binding of bindings) {
+                binding.tiledImage.viewport = this.viewport;
+            }
+            return bindings;
+        };
+
+        drawer._restoreTiledImageViewports = function(bindings) {
+            if (!bindings) {
+                return;
+            }
+            for (const binding of bindings) {
+                binding.tiledImage.viewport = binding.viewport;
+            }
+        };
+
         drawer._syncViewerViewport = async function(view, size) {
             if (!view || view instanceof OpenSeadragon.FlexDrawer) {
                 return;
             }
 
-            const viewport = viewer.viewport;
+            const viewport = this.viewport;
             if (!viewport) {
                 return;
             }
 
-            if (size && typeof size.x === "number" && typeof size.y === "number") {
-                viewer.container.style.width = `${size.x}px`;
-                viewer.container.style.height = `${size.y}px`;
-                viewer.forceResize();
-            }
-
-            if (view.bounds) {
-                viewport.fitBounds(view.bounds, true);
-            } else {
-                if (typeof view.zoom === "number") {
-                    viewport.zoomTo(view.zoom, null, true);
-                }
-                if (view.center) {
-                    viewport.panTo(view.center, true);
-                }
-            }
-
-            if (typeof view.rotation === "number") {
-                viewport.setRotation(view.rotation * 180 / Math.PI, true);
-            }
-
-            viewport.applyConstraints(true);
-            viewer.forceRedraw();
+            syncStandaloneViewportState(viewport, viewer, view, size);
 
             await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
         };
@@ -300,21 +386,27 @@
         drawer._collectReadyTiles = async function(tiledImages, view, size) {
             await this._syncViewerViewport(view, size);
 
+            for (const tiledImage of tiledImages) {
+                tiledImage.update(true);
+            }
+
             let tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
             if (tiles.length) {
                 return tiles;
             }
 
             for (let attempt = 0; attempt < 3; attempt++) {
-                viewer.forceRedraw();
                 await new $.Promise(resolve => requestAnimationFrame(() => resolve()));
+                for (const tiledImage of tiledImages) {
+                    tiledImage.update(true);
+                }
                 tiles = tiledImages.map(ti => ti.getTilesToDraw()).flat();
                 if (tiles.length) {
                     return tiles;
                 }
             }
 
-            return tiles;
+            return [];
         };
 
         /**
@@ -332,6 +424,7 @@
         drawer.drawWithConfiguration = (async function (tiledImages, configuration = undefined, view = undefined, size = undefined) {
             let tiles;
             let tasks;
+            let viewportBindings = null;
 
             let fullDrawPass = true;
             if (!view || view instanceof OpenSeadragon.FlexDrawer) {
@@ -349,17 +442,24 @@
             }
 
             if (fullDrawPass) {
-                tiles = await drawer._collectReadyTiles(tiledImages, view, size);
-                if (!tiles.length) {
-                    throw new Error("Standalone extraction found no tiles to draw for the requested view.");
+                viewportBindings = drawer._bindTiledImagesToViewport(tiledImages);
+                try {
+                    tiles = await drawer._collectReadyTiles(tiledImages, view, size);
+                    if (!tiles.length) {
+                        throw new Error("Standalone extraction found no tiles to draw for the requested view.");
+                    }
+                    tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
+                } catch (e) {
+                    drawer._restoreTiledImageViewports(viewportBindings);
+                    viewportBindings = null;
+                    throw e;
                 }
-                tasks = tiles.map(t => t.tile.getCache().prepareForRendering(drawer));
             }
 
             await lock();
             try {
                 if (configuration) {
-                    await drawer.overrideConfigureAll(configuration);
+                    await drawer.overrideConfigureAll(configuration, undefined, { immediate: true });
                 }
 
                 // todo: tiledImages.length is not reliable! we can have TI that produces more layers in the color part!
@@ -386,6 +486,8 @@
                         // free data
                         const dId = drawer.getId();
                         tiles.forEach(t => t.tile.getCache().destroyInternalCache(dId));
+                        drawer._restoreTiledImageViewports(viewportBindings);
+                        viewportBindings = null;
                     });
                 }
 
@@ -436,6 +538,9 @@
                 ctx.drawImage(this.renderer.canvas, 0, 0);
                 return ctx;
             } finally {
+                if (viewportBindings) {
+                    drawer._restoreTiledImageViewports(viewportBindings);
+                }
                 unlock();
             }
         }).bind(drawer);

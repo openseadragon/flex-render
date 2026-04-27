@@ -351,6 +351,10 @@
                     type: Shader.type(),
                     name: typeof Shader.name === "function" ? Shader.name() : Shader.type(),
                     description: typeof Shader.description === "function" ? Shader.description() : "",
+                    intent: typeof Shader.intent === "function" ? Shader.intent() : undefined,
+                    expects: typeof Shader.expects === "function" ? Shader.expects() : undefined,
+                    exampleParams: typeof Shader.exampleParams === "function" ? Shader.exampleParams() : undefined,
+                    controlCouplings: this._serializeControlCouplings(Shader),
                     preview: this._resolveShaderPreview(Shader),
                     sources: sources.map((src, index) => ({
                         index,
@@ -387,6 +391,10 @@
                     type: Shader.type(),
                     name: typeof Shader.name === "function" ? Shader.name() : Shader.type(),
                     description: typeof Shader.description === "function" ? Shader.description() : "",
+                    intent: typeof Shader.intent === "function" ? Shader.intent() : undefined,
+                    expects: typeof Shader.expects === "function" ? Shader.expects() : undefined,
+                    exampleParams: typeof Shader.exampleParams === "function" ? Shader.exampleParams() : undefined,
+                    controlCouplings: this._serializeControlCouplings(Shader),
                     rootConfig: this._compileShaderRootConfigSchema(Shader),
                     params: this._compileShaderParamsSchema(Shader, sources),
                     sources: sources.map((src, index) => ({
@@ -430,6 +438,72 @@
 
         async compileConfigSchemaModelAsync() {
             return this.compileConfigSchemaModel();
+        },
+
+        /**
+         * Serialization-friendly view of a shader's `controlCouplings()`.
+         * Returns `undefined` when the shader has none (so JSON output stays clean),
+         * or an array of `{name, summary, controls}` (no functions).
+         */
+        _serializeControlCouplings(Shader) {
+            if (!Shader || typeof Shader.controlCouplings !== "function") {
+                return undefined;
+            }
+            const raw = Shader.controlCouplings();
+            if (!Array.isArray(raw) || raw.length === 0) {
+                return undefined;
+            }
+            return raw.map(c => ({
+                name: c.name,
+                summary: c.summary,
+                controls: c.controls
+            }));
+        },
+
+        /**
+         * Canonical "how many color classes does this `color` control value carry?".
+         * Single source of truth for couplings and renderer-side coercion.
+         * Precedence: a `custom_colormap` with a `default` array wins over `steps`,
+         * otherwise `steps` wins; primitives count as one class.
+         */
+        resolveEffectiveColorSteps(colorValue) {
+            if (!colorValue || typeof colorValue !== "object") {
+                return 1;
+            }
+            if (colorValue.type === "custom_colormap" && Array.isArray(colorValue.default)) {
+                return colorValue.default.length;
+            }
+            if (typeof colorValue.steps === "number") {
+                return colorValue.steps;
+            }
+            return 1;
+        },
+
+        /**
+         * Returns runtime coupling validators (with the `validate` function attached) for
+         * a given shader type. Hosts call this to validate layers before submission.
+         * The schema model only ships serialization-friendly entries (no functions).
+         */
+        getShaderCouplingValidators(shaderType) {
+            const Mediator = $.FlexRenderer.ShaderMediator;
+            const Shader = Mediator && (typeof Mediator.getShaderByType === "function"
+                ? Mediator.getShaderByType(shaderType)
+                : typeof Mediator.getClass === "function"
+                    ? Mediator.getClass(shaderType)
+                    : null);
+            if (!Shader || typeof Shader.controlCouplings !== "function") {
+                return [];
+            }
+            const raw = Shader.controlCouplings();
+            if (!Array.isArray(raw)) {
+                return [];
+            }
+            return raw.map(c => ({
+                name: c.name,
+                summary: c.summary,
+                controls: c.controls,
+                validate: typeof c.validate === "function" ? c.validate : undefined
+            }));
         },
 
         async compileDocsModelAsync() {
@@ -909,7 +983,7 @@
                 supportedUiTypes: control.supportedUiTypes,
                 defaultControlConfig: control.default !== null ? deepClone(control.default) : null,
                 requiredControlConfig: control.required !== null ? deepClone(control.required) : null,
-                supportedControlSchemas: this._expandSupportedUiSchemas(control.supportedUiTypes)
+                supportedTypes: control.supportedUiTypes
             }));
 
             const customParams = Object.entries(Shader.customParams || {}).map(([name, meta]) => ({
@@ -1189,6 +1263,21 @@
                 if (shader.description) {
                     out.push(`Description: ${shader.description}`);
                 }
+                if (shader.intent) {
+                    out.push(`Intent: ${shader.intent}`);
+                }
+                if (shader.expects) {
+                    out.push(`Expects: ${JSON.stringify(shader.expects)}`);
+                }
+                if (shader.exampleParams !== undefined) {
+                    out.push(`Example params: ${JSON.stringify(shader.exampleParams)}`);
+                }
+                if (Array.isArray(shader.controlCouplings) && shader.controlCouplings.length) {
+                    out.push(`Control couplings:`);
+                    for (const c of shader.controlCouplings) {
+                        out.push(`- ${c.name} [${(c.controls || []).join(", ")}]: ${c.summary}`);
+                    }
+                }
 
                 if (shader.sources.length) {
                     out.push(`Sources:`);
@@ -1418,6 +1507,42 @@
         ${this._renderShaderPreviewMarkup(preview, "rounded-box border border-base-300 max-w-[150px] max-h-[150px] shrink-0")}
   </summary>
   <div class="border-t border-base-300 p-4 text-sm">
+    ${shader.intent ? `
+    <div class="mb-3">
+        <div class="font-semibold">Intent</div>
+        <div>${escapeHtml(shader.intent)}</div>
+    </div>` : ""}
+
+    ${shader.expects ? `
+    <div class="mb-3">
+        <div class="font-semibold">Expects</div>
+        <pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(shader.expects, null, 2))}</pre>
+    </div>` : ""}
+
+    ${shader.exampleParams !== undefined ? `
+    <div class="mb-3">
+        <div class="font-semibold">Example params</div>
+        <pre class="text-xs whitespace-pre-wrap">${escapeHtml(JSON.stringify(shader.exampleParams, null, 2))}</pre>
+    </div>` : ""}
+
+    ${Array.isArray(shader.controlCouplings) && shader.controlCouplings.length ? `
+    <div class="mb-3">
+        <div class="font-semibold">Control couplings</div>
+        <div class="overflow-x-auto">
+            <table class="table table-sm">
+                <thead><tr><th>Name</th><th>Controls</th><th>Rule</th></tr></thead>
+                <tbody>
+                    ${shader.controlCouplings.map(c => `
+                    <tr>
+                        <td><code>${escapeHtml(c.name)}</code></td>
+                        <td>${escapeHtml((c.controls || []).join(", "))}</td>
+                        <td>${escapeHtml(c.summary || "")}</td>
+                    </tr>`).join("")}
+                </tbody>
+            </table>
+        </div>
+    </div>` : ""}
+
      ${shader.sources.length ? `
     <div>
         <div class="mb-2 font-semibold">Sources</div>

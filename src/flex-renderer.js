@@ -953,6 +953,18 @@
             for (let pId in this._programImplementations) {
                 this.deleteProgram(pId);
             }
+            if (this._extractionFB) {
+                this.gl.deleteFramebuffer(this._extractionFB);
+                this._extractionFB = null;
+            }
+            if (this._debugPreviewFB) {
+                this.gl.deleteFramebuffer(this._debugPreviewFB);
+                this._debugPreviewFB = null;
+            }
+            if (this._debugPreviewColorRB) {
+                this.gl.deleteRenderbuffer(this._debugPreviewColorRB);
+                this._debugPreviewColorRB = null;
+            }
             this.webglContext.destroy();
             this._programImplementations = {};
         }
@@ -1392,7 +1404,8 @@
             scale = 1,
             pad = 8,
             drawLabels = true,
-            background = '#111'
+            background = '#111',
+            maxCellSize = 160
         } = {}) {
             const colorLayers = renderOutput.textureDepth || 0;
             const stencilLayers = renderOutput.stencilDepth || 0;
@@ -1407,8 +1420,11 @@
 
             const width = Math.max(1, Math.floor(this.canvas.width));
             const height = Math.max(1, Math.floor(this.canvas.height));
-            const cellW = Math.max(1, Math.floor(width * scale));
-            const cellH = Math.max(1, Math.floor(height * scale));
+            const scaledCellW = Math.max(1, Math.floor(width * scale));
+            const scaledCellH = Math.max(1, Math.floor(height * scale));
+            const cellScale = Math.min(1, maxCellSize / Math.max(scaledCellW, scaledCellH));
+            const cellW = Math.max(1, Math.floor(scaledCellW * cellScale));
+            const cellH = Math.max(1, Math.floor(scaledCellH * cellScale));
 
             const sectionGap = 28;
             const headerH = drawLabels ? 18 : 0;
@@ -1442,8 +1458,8 @@
                 this._debugStage = document.createElement('canvas');
             }
             const stage = this._debugStage;
-            stage.width = width;
-            stage.height = height;
+            stage.width = cellW;
+            stage.height = cellH;
             const stageCtx = stage.getContext('2d', { willReadFrequently: true });
 
             const outputCanvas = ctx.canvas;
@@ -1457,12 +1473,12 @@
             ctx.imageSmoothingEnabled = false;
 
             let pixels = this._readbackBuffer;
-            if (!pixels || pixels.length !== width * height * 4) {
-                pixels = this._readbackBuffer = new Uint8ClampedArray(width * height * 4);
+            if (!pixels || pixels.length !== cellW * cellH * 4) {
+                pixels = this._readbackBuffer = new Uint8ClampedArray(cellW * cellH * 4);
             }
 
-            if (!this._imageData || this._imageData.width !== width || this._imageData.height !== height) {
-                this._imageData = new ImageData(width, height);
+            if (!this._imageData || this._imageData.width !== cellW || this._imageData.height !== cellH) {
+                this._imageData = new ImageData(cellW, cellH);
             }
             const imageData = this._imageData;
 
@@ -1470,12 +1486,30 @@
             if (!this._extractionFB) {
                 this._extractionFB = gl.createFramebuffer();
             }
-            gl.bindFramebuffer(gl.FRAMEBUFFER, this._extractionFB);
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this._extractionFB);
+
+            if (!this._debugPreviewFB) {
+                this._debugPreviewFB = gl.createFramebuffer();
+            }
+            if (!this._debugPreviewColorRB) {
+                this._debugPreviewColorRB = gl.createRenderbuffer();
+            }
+
+            gl.bindRenderbuffer(gl.RENDERBUFFER, this._debugPreviewColorRB);
+            if (this._debugPreviewSizeW !== cellW || this._debugPreviewSizeH !== cellH) {
+                gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, cellW, cellH);
+                this._debugPreviewSizeW = cellW;
+                this._debugPreviewSizeH = cellH;
+            }
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this._debugPreviewFB);
+            gl.framebufferRenderbuffer(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this._debugPreviewColorRB);
+            gl.bindRenderbuffer(gl.RENDERBUFFER, null);
 
             // Small helpers to attach a layer/texture
             const attachLayer = (texArray, layerIndex) => {
                 // WebGL2 texture array
-                gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, 0, layerIndex);
+                gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this._extractionFB);
+                gl.framebufferTextureLayer(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texArray, 0, layerIndex);
             };
 
             const drawEmptyCell = (x, y, text = '—') => {
@@ -1500,16 +1534,31 @@
 
                 attachLayer(texArray, layerIndex);
 
-                if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+                if (gl.checkFramebufferStatus(gl.READ_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
                     console.error(`Framebuffer incomplete for ${kind} layer`, layerIndex);
                     drawEmptyCell(x, y, 'fb err');
                     return;
                 }
 
-                gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this._debugPreviewFB);
+                if (gl.checkFramebufferStatus(gl.DRAW_FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+                    console.error(`Preview framebuffer incomplete for ${kind} layer`, layerIndex);
+                    drawEmptyCell(x, y, 'fb err');
+                    return;
+                }
+
+                gl.blitFramebuffer(
+                    0, 0, width, height,
+                    0, 0, cellW, cellH,
+                    gl.COLOR_BUFFER_BIT,
+                    gl.NEAREST
+                );
+
+                gl.bindFramebuffer(gl.FRAMEBUFFER, this._debugPreviewFB);
+                gl.readPixels(0, 0, cellW, cellH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
                 imageData.data.set(pixels);
                 stageCtx.putImageData(imageData, 0, 0);
-                ctx.drawImage(stage, 0, 0, width, height, x, y, cellW, cellH);
+                ctx.drawImage(stage, x, y, cellW, cellH);
             };
 
             const rawHeaderY = pad;
@@ -1589,6 +1638,8 @@
                 }
             }
 
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         }
 

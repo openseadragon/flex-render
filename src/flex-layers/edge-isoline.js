@@ -25,6 +25,18 @@ $.FlexRenderer.ShaderMediator.registerLayer(class extends $.FlexRenderer.ShaderL
         return "highlights edges at threshold values";
     }
 
+    static intent() {
+        return "Trace iso-contour edges where a scalar field crosses a threshold. Pick to outline level sets without filling regions.";
+    }
+
+    static expects() {
+        return { dataKind: "scalar", channels: 1, requiresThreshold: true };
+    }
+
+    static exampleParams() {
+        return { color: "#fff700", threshold: 50, edgeThickness: 1 };
+    }
+
     static docs() {
         return {
             summary: "Edge-highlighting shader for one scalar input channel.",
